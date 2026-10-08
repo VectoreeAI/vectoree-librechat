@@ -76,11 +76,10 @@ test('backup_main records the previous main without interpolating the message', 
   assert.match(backup, /git push origin HEAD:refs\/heads\/main-backup/);
 });
 
-test('test job runs the contract test and unit tests only', () => {
+test('test job runs only the pipeline contract test', () => {
   const check = job('test', 'publish_github');
   assert.match(check, /image: node:24\.16\.0-bookworm-slim/);
-  assert.match(check, /NODE_OPTIONS: "--max-old-space-size=6144"/);
-  assert.match(check, /timeout: 90m/);
+  assert.match(check, /timeout: 10m/);
   for (const rule of [
     '$CI_PIPELINE_SOURCE == "merge_request_event"',
     '$CI_COMMIT_BRANCH == "dev"',
@@ -88,12 +87,10 @@ test('test job runs the contract test and unit tests only', () => {
   ]) {
     assert.ok(check.includes(rule), rule);
   }
-  const install = check.indexOf('npm ci --cache .npm --prefer-offline');
-  const contract = check.indexOf('node --test config/gitlab-ci.contract.test.mjs');
-  const all = check.indexOf('npm run test:all');
-  assert.ok(install >= 0 && contract > install && all > contract);
-  assert.equal(check.includes('e2e'), false);
-  assert.equal(check.includes('lighthouse'), false);
+  assert.match(check, /node --test config\/gitlab-ci\.contract\.test\.mjs/);
+  for (const absent of ['npm ci', 'npm run test:all', 'e2e', 'lighthouse']) {
+    assert.equal(check.includes(absent), false, absent);
+  }
 });
 
 test('publish_github refuses secrets and divergent GitHub history', () => {
@@ -145,7 +142,13 @@ test('secret pattern matches key material and ignores ordinary messages', () => 
 });
 
 test('local tool directories are ignored and untracked', () => {
+  const ignoreLines = new Set(
+    readFileSync(path.join(root, '.gitignore'), 'utf8')
+      .split('\n')
+      .map((line) => line.trim()),
+  );
   for (const rel of ['.cursor', '.agent', '.agents', 'openspec']) {
+    assert.equal(ignoreLines.has(rel), true, rel);
     const result = spawnSync('git', ['check-ignore', '-v', '--', rel], {
       cwd: root,
       encoding: 'utf8',

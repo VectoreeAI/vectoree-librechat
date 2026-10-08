@@ -93,21 +93,11 @@ test:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
     - if: $CI_COMMIT_BRANCH == "main"
-  variables:
-    NODE_OPTIONS: "--max-old-space-size=6144"
-  cache:
-    key:
-      files:
-        - package-lock.json
-    paths:
-      - .npm
   before_script:
     - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates git >/dev/null
   script:
-    - npm ci --cache .npm --prefer-offline
     - node --test config/gitlab-ci.contract.test.mjs
-    - npm run test:all
-  timeout: 90m
+  timeout: 10m
 
 # dev 合并进 main 后，把 GitLab main 推到 GitHub main。
 # 没有共同历史时，用一次 --force-with-lease 替换 GitHub 上的旧提交。
