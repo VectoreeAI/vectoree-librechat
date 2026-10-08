@@ -1,0 +1,171 @@
+# GitLab CI：合并请求、dev、main 只跑检查。
+# 推送 main 时，先把推送前的 main 并入 main-backup，再把 main 推到 GitHub。
+# 不构建镜像，不登录容器仓库，不连接部署主机。
+#
+# GitHub 仓库：https://github.com/VectoreeAI/vectoree-librechat.git
+# 需要 CI 变量 GITHUB_TOKEN（Masked、Protected，环境范围 All）。
+# 备份推送需要允许本仓库的 CI_JOB_TOKEN 推送到 main-backup。
+#
+# 脚本里的 $$ 是 GitLab 的转义：runner 把它变成 $，再由 shell 展开。
+# 令牌因此留在环境变量里，不会写进脚本文本或远程地址。
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+default:
+  tags: [docker]
+  interruptible: true
+
+stages:
+  - .pre
+  - check
+  - publish
+
+.git_auth:
+  image: alpine:3.21
+  interruptible: false
+  variables:
+    GIT_DEPTH: "0"
+    GIT_ASKPASS: /tmp/git-askpass
+    GIT_TERMINAL_PROMPT: "0"
+  before_script:
+    - apk add --no-cache git ca-certificates
+    - |
+      set -eu
+      umask 077
+      printf '%s\n' \
+        '#!/bin/sh' \
+        'prompt="$$1"' \
+        'case "$$prompt" in' \
+        '  *[Uu]sername*)' \
+        '    case "$$prompt" in' \
+        '      *github.com*) printf "%s\n" "x-access-token" ;;' \
+        '      *) printf "%s\n" "gitlab-ci-token" ;;' \
+        '    esac' \
+        '    ;;' \
+        '  *)' \
+        '    case "$$prompt" in' \
+        '      *github.com*) printf "%s\n" "$$GITHUB_TOKEN" ;;' \
+        '      *) printf "%s\n" "$$CI_JOB_TOKEN" ;;' \
+        '    esac' \
+        '    ;;' \
+        'esac' \
+        > /tmp/git-askpass
+      chmod 700 /tmp/git-askpass
+      git config --global credential.helper ""
+      git remote set-url origin "https://$${CI_SERVER_HOST}/$${CI_PROJECT_PATH}.git"
+
+backup_main:
+  extends: .git_auth
+  stage: .pre
+  resource_group: librechat-main-backup
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - |
+      set -eu
+      before="$${CI_COMMIT_BEFORE_SHA:-}"
+      empty="0000000000000000000000000000000000000000"
+      if [ -z "$$before" ] || [ "$$before" = "$$empty" ]; then
+        echo "No previous main commit to back up."
+        exit 0
+      fi
+      git config user.email "$${GITLAB_USER_EMAIL:-ci@vectoree.space}"
+      git config user.name "$${GITLAB_USER_NAME:-GitLab CI}"
+      git fetch origin "$$before"
+      if git fetch origin refs/heads/main-backup; then
+        git checkout -B main-backup FETCH_HEAD
+        git merge --no-edit --allow-unrelated-histories "$$before" -m 'chore: backup main before release'
+      else
+        git checkout -B main-backup "$$before"
+      fi
+      git push origin HEAD:refs/heads/main-backup
+      echo "main-backup updated from $$before"
+
+test:
+  stage: check
+  image: node:24.16.0-bookworm-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "main"
+  variables:
+    NODE_OPTIONS: "--max-old-space-size=6144"
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm
+  before_script:
+    - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates git >/dev/null
+  script:
+    - npm ci --cache .npm --prefer-offline
+    - node --test config/gitlab-ci.contract.test.mjs
+    - npm run test:all
+  timeout: 90m
+
+# dev 合并进 main 后，把 GitLab main 推到 GitHub main。
+# 没有共同历史时，用一次 --force-with-lease 替换 GitHub 上的旧提交。
+# 已经有共同历史但 GitHub 超前时，拒绝覆盖。
+# GITHUB_TOKEN 直接放进请求地址，和 vectoree-starter 的 publish_github 一样。
+publish_github:
+  stage: publish
+  image: alpine:3.21
+  interruptible: false
+  needs:
+    - test
+    - backup_main
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git ca-certificates
+  script:
+    - |
+      set -euo pipefail
+      test -n "${GITHUB_TOKEN:-}" || (echo "Set GITHUB_TOKEN in GitLab CI/CD variables (Masked, Protected, environment All)." && exit 1)
+      secret_pattern='BEGIN (RSA |OPENSSH )?PRIVATE KEY|ghp_|github_pat_|glpat-|AKIA[0-9A-Z]{16}|(^|[^A-Za-z0-9_])(TOKEN|PASSWORD|SECRET)=[^[:space:]]'
+      if printf '' | grep -E -q "$secret_pattern"; then
+        :
+      else
+        status="$?"
+        if [ "$status" -eq 2 ]; then
+          echo "Secret pattern is invalid."
+          exit 1
+        fi
+      fi
+      secret_sha=""
+      git log --format='%H' > /tmp/gitlab-main-shas
+      while IFS= read -r sha; do
+        [ -n "$sha" ] || continue
+        body="$(git log -1 --format='%B' "$sha")"
+        if printf '%s\n' "$body" | grep -E -q "$secret_pattern"; then
+          secret_sha="$sha"
+          break
+        fi
+      done < /tmp/gitlab-main-shas
+      rm -f /tmp/gitlab-main-shas
+      if [ -n "$secret_sha" ]; then
+        printf '%s commit message matched a secret pattern\n' "$secret_sha"
+        exit 1
+      fi
+      github_url="https://x-access-token:${GITHUB_TOKEN}@github.com/VectoreeAI/vectoree-librechat.git"
+      git fetch "$github_url" refs/heads/main
+      if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+        git push "$github_url" "HEAD:refs/heads/main"
+        echo "GitHub main updated"
+      elif git merge-base FETCH_HEAD HEAD >/dev/null 2>&1; then
+        echo "GitHub main has diverged from GitLab main. Refusing to overwrite."
+        exit 1
+      else
+        remote_sha="$(git rev-parse FETCH_HEAD)"
+        echo "GitHub main has no common history. Replacing ${remote_sha} once."
+        git push --force-with-lease="refs/heads/main:${remote_sha}" "$github_url" "HEAD:refs/heads/main"
+        echo "GitHub main replaced"
+      fi
