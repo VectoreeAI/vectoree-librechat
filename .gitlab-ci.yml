@@ -5,9 +5,7 @@
 # GitHub 仓库：https://github.com/VectoreeAI/vectoree-librechat.git
 # 需要 CI 变量 GITHUB_TOKEN（Masked、Protected，环境范围 All）。
 # 备份推送需要允许本仓库的 CI_JOB_TOKEN 推送到 main-backup。
-#
-# 脚本里的 $$ 是 GitLab 的转义：runner 把它变成 $，再由 shell 展开。
-# 令牌因此留在环境变量里，不会写进脚本文本或远程地址。
+# CI_JOB_TOKEN 与 GITHUB_TOKEN 都直接写进远程地址，和 vectoree-starter 一样。
 
 workflow:
   rules:
@@ -25,66 +23,40 @@ stages:
   - check
   - publish
 
-.git_auth:
+# 合并进 main 之后，流水线第一步把合并前的 main 合并进 main-backup。
+# CI_COMMIT_BEFORE_SHA 是这次推送之前的 main。备份成功后才推 GitHub。
+backup_main:
+  stage: .pre
   image: alpine:3.21
   interruptible: false
-  variables:
-    GIT_DEPTH: "0"
-    GIT_ASKPASS: /tmp/git-askpass
-    GIT_TERMINAL_PROMPT: "0"
-  before_script:
-    - apk add --no-cache git ca-certificates
-    - |
-      set -eu
-      umask 077
-      printf '%s\n' \
-        '#!/bin/sh' \
-        'prompt="$$1"' \
-        'case "$$prompt" in' \
-        '  *[Uu]sername*)' \
-        '    case "$$prompt" in' \
-        '      *github.com*) printf "%s\n" "x-access-token" ;;' \
-        '      *) printf "%s\n" "gitlab-ci-token" ;;' \
-        '    esac' \
-        '    ;;' \
-        '  *)' \
-        '    case "$$prompt" in' \
-        '      *github.com*) printf "%s\n" "$$GITHUB_TOKEN" ;;' \
-        '      *) printf "%s\n" "$$CI_JOB_TOKEN" ;;' \
-        '    esac' \
-        '    ;;' \
-        'esac' \
-        > /tmp/git-askpass
-      chmod 700 /tmp/git-askpass
-      git config --global credential.helper ""
-      git remote set-url origin "https://$${CI_SERVER_HOST}/$${CI_PROJECT_PATH}.git"
-
-backup_main:
-  extends: .git_auth
-  stage: .pre
   resource_group: librechat-main-backup
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git ca-certificates
   script:
     - |
-      set -eu
-      before="$${CI_COMMIT_BEFORE_SHA:-}"
+      set -euo pipefail
+      before="${CI_COMMIT_BEFORE_SHA:-}"
       empty="0000000000000000000000000000000000000000"
-      if [ -z "$$before" ] || [ "$$before" = "$$empty" ]; then
+      if [ -z "$before" ] || [ "$before" = "$empty" ]; then
         echo "No previous main commit to back up."
         exit 0
       fi
-      git config user.email "$${GITLAB_USER_EMAIL:-ci@vectoree.space}"
-      git config user.name "$${GITLAB_USER_NAME:-GitLab CI}"
-      git fetch origin "$$before"
+      git config user.email "${GITLAB_USER_EMAIL:-ci@vectoree.space}"
+      git config user.name "${GITLAB_USER_NAME:-GitLab CI}"
+      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+      git fetch origin "$before"
       if git fetch origin refs/heads/main-backup; then
         git checkout -B main-backup FETCH_HEAD
-        git merge --no-edit --allow-unrelated-histories "$$before" -m 'chore: backup main before release'
+        git merge --no-edit --allow-unrelated-histories "$before" -m 'chore: backup main before release'
       else
-        git checkout -B main-backup "$$before"
+        git checkout -B main-backup "$before"
       fi
       git push origin HEAD:refs/heads/main-backup
-      echo "main-backup updated from $$before"
+      echo "main-backup updated from ${before}"
 
 test:
   stage: check

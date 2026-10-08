@@ -47,22 +47,20 @@ test('pipeline has no deploy path and injects the GitHub token into the publish 
     assert.equal(ciText.includes(forbidden), false, forbidden);
   }
   assert.deepEqual(ciText.match(/:\/\/[^\s/]+@/g), [
+    '://gitlab-ci-token:${CI_JOB_TOKEN}@',
     '://x-access-token:${GITHUB_TOKEN}@',
   ]);
-  assert.equal(/(?<!\$)\$CI_JOB_TOKEN/.test(ciText), false);
+  assert.equal(ciText.includes('$$'), false);
 });
 
-test('git auth reads tokens from the environment', () => {
-  const auth = job('.git_auth', 'backup_main');
-  assert.match(auth, /image: alpine:3\.21/);
-  assert.match(auth, /GIT_ASKPASS: \/tmp\/git-askpass/);
-  assert.match(auth, /GIT_TERMINAL_PROMPT: "0"/);
-  assert.match(auth, /umask 077/);
-  assert.match(auth, /chmod 700 \/tmp\/git-askpass/);
-  assert.match(auth, /\$\$GITHUB_TOKEN/);
-  assert.match(auth, /\$\$CI_JOB_TOKEN/);
-  assert.match(auth, /https:\/\/\$\$\{CI_SERVER_HOST\}\/\$\$\{CI_PROJECT_PATH\}\.git/);
-  assert.match(auth, /set -eu/);
+test('backup_main injects the job token into the origin URL', () => {
+  const backup = job('backup_main', 'test');
+  assert.match(backup, /image: alpine:3\.21/);
+  assert.match(
+    backup,
+    /https:\/\/gitlab-ci-token:\$\{CI_JOB_TOKEN\}@\$\{CI_SERVER_HOST\}\/\$\{CI_PROJECT_PATH\}\.git/,
+  );
+  assert.equal(backup.includes('GIT_ASKPASS'), false);
 });
 
 test('backup_main records the previous main without interpolating the message', () => {
