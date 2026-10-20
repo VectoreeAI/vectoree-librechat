@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { setRuntimeEnvReader } from 'librechat-data-provider';
 import type { VectoreeFetch } from './url';
 import { DEFAULT_API_URL, normalizeApiUrl } from './url';
 import { nonEmpty, readErrorMessage } from './text';
@@ -8,6 +9,7 @@ import { readDeployMode } from './mode';
 export const PREVIEW_COOKIE = 've_preview';
 
 const IDLE_MS = 12 * 60 * 60 * 1000;
+const PENDING_MS = 2 * 60 * 1000;
 const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const REDEEM_PATH = '/api/system/starter/preview/redeem';
 const TICKET = /^\S{16,512}$/;
@@ -19,7 +21,11 @@ export type PreviewCredentials = {
   projectId: string;
 };
 
-type StoredPreview = PreviewCredentials & { lastUsed: number };
+type StoredPreview = PreviewCredentials & {
+  lastUsed: number;
+  pending?: boolean;
+  ownerId?: string;
+};
 
 const previews = new Map<string, StoredPreview>();
 const current = new AsyncLocalStorage<PreviewCredentials>();
@@ -43,8 +49,20 @@ export type PreviewCookie = {
 
 export type PreviewRedeemResult = {
   status: 200 | 401 | 404 | 502;
-  body: { projectId?: string; message?: string; code?: 'preview_required' };
+  body: {
+    projectId?: string;
+    projectName?: string;
+    confirm?: boolean;
+    switchToken?: string;
+    message?: string;
+    code?: 'preview_required';
+  };
   cookie?: PreviewCookie;
+};
+
+export type PreviewPrincipal = {
+  openidId?: string;
+  provider?: string;
 };
 
 export function clearPreviews(): void {
@@ -53,7 +71,8 @@ export function clearPreviews(): void {
 
 export function dropIdlePreviews(now: number): void {
   for (const [id, stored] of previews) {
-    if (now - stored.lastUsed > IDLE_MS) previews.delete(id);
+    const limit = stored.pending ? PENDING_MS : IDLE_MS;
+    if (now - stored.lastUsed > limit) previews.delete(id);
   }
 }
 
@@ -144,25 +163,114 @@ export async function redeemCloudPreview(input: {
     return { status: 502, body: { message: 'Vectoree returned an unexpected preview' } };
   }
 
-  const previous = cookieValue(input.cookieHeader, PREVIEW_COOKIE);
-  if (previous && PREVIEW_ID.test(previous)) previews.delete(previous);
+  const now = input.now?.() ?? Date.now();
+  const projectName = projectId;
+  const previousId = cookieValue(input.cookieHeader, PREVIEW_COOKIE);
+  const previous = previousId && PREVIEW_ID.test(previousId) ? previews.get(previousId) : undefined;
+  if (
+    previous &&
+    !previous.pending &&
+    now - previous.lastUsed <= IDLE_MS &&
+    previous.projectId === projectId
+  ) {
+    previous.apiKey = apiKey;
+    previous.apiUrl = apiUrl;
+    previous.lastUsed = now;
+    return { status: 200, body: { projectId, projectName } };
+  }
+  if (previous && !previous.pending && now - previous.lastUsed <= IDLE_MS) {
+    const id = randomBytes(32).toString('hex');
+    previews.set(id, { apiUrl, apiKey, projectId, lastUsed: now, pending: true });
+    return { status: 200, body: { projectId, projectName, confirm: true, switchToken: id } };
+  }
+  if (previousId && PREVIEW_ID.test(previousId)) previews.delete(previousId);
   const id = randomBytes(32).toString('hex');
-  previews.set(id, { apiUrl, apiKey, projectId, lastUsed: input.now?.() ?? Date.now() });
+  previews.set(id, { apiUrl, apiKey, projectId, lastUsed: now });
+  return { status: 200, body: { projectId, projectName }, cookie: previewCookie(input.env, input.secure, id) };
+}
+
+export function confirmCloudPreview(input: {
+  env: NodeJS.ProcessEnv;
+  switchToken: unknown;
+  cookieHeader?: string;
+  secure: boolean;
+  now?: () => number;
+}): PreviewRedeemResult {
+  if (readDeployMode(input.env) !== 'cloud') {
+    return { status: 404, body: { message: 'Not available in local mode' } };
+  }
+  const pending = takePending(input.switchToken, input.now?.() ?? Date.now());
+  if (!pending) return expiredPreview();
+  const previousId = cookieValue(input.cookieHeader, PREVIEW_COOKIE);
+  if (previousId && previousId !== pending.id) previews.delete(previousId);
+  pending.stored.pending = false;
+  pending.stored.ownerId = undefined;
   return {
     status: 200,
-    body: { projectId },
-    cookie: {
-      name: PREVIEW_COOKIE,
-      value: id,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: input.secure,
-        path: publicCookiePath(input.env),
-        maxAge: COOKIE_MAX_AGE_MS,
-      },
-    },
+    body: { projectId: pending.stored.projectId, projectName: pending.stored.projectId },
+    cookie: previewCookie(input.env, input.secure, pending.id),
   };
+}
+
+export function declineCloudPreview(env: NodeJS.ProcessEnv, switchToken: unknown): PreviewRedeemResult {
+  if (readDeployMode(env) !== 'cloud') {
+    return { status: 404, body: { message: 'Not available in local mode' } };
+  }
+  const id = typeof switchToken === 'string' ? switchToken : '';
+  const stored = PREVIEW_ID.test(id) ? previews.get(id) : undefined;
+  if (stored?.pending) previews.delete(id);
+  return { status: 200, body: {} };
+}
+
+export function bindPreviewOwner(cookieHeader: string | undefined, ownerId: string): boolean {
+  const stored = activeStored(cookieHeader);
+  if (!stored || !ownerId.trim()) return false;
+  stored.ownerId = ownerId.trim();
+  return true;
+}
+
+export function dropPreviewSession(cookieHeader: string | undefined): void {
+  const id = cookieValue(cookieHeader, PREVIEW_COOKIE);
+  if (id) previews.delete(id);
+}
+
+export function assertCloudPreview(
+  env: NodeJS.ProcessEnv,
+  cookieHeader: string | undefined,
+  user: PreviewPrincipal,
+): { status: 401; message: string } | null {
+  let cloud = false;
+  try {
+    cloud = readDeployMode(env) === 'cloud';
+  } catch {
+    return { status: 401, message: 'DEPLOY_MODE must be local or cloud' };
+  }
+  if (!cloud) return null;
+  const stored = activeStored(cookieHeader);
+  if (!stored) {
+    return { status: 401, message: 'This preview has expired. Open it again from Vectoree.' };
+  }
+  if (!stored.ownerId || user.provider !== 'vectoree' || user.openidId !== stored.ownerId) {
+    return { status: 401, message: 'Sign in again for this preview.' };
+  }
+  return null;
+}
+
+/** Cloud returns the visitor key, or '' when there is no preview. Other modes return undefined. */
+export function currentVectoreeApiKey(): string | undefined {
+  try {
+    if (readDeployMode(process.env) !== 'cloud') return undefined;
+  } catch {
+    return '';
+  }
+  return currentPreviewCredentials()?.apiKey ?? '';
+}
+
+export function installCloudPreviewEnv(): void {
+  setRuntimeEnvReader((name) => {
+    if (name !== 'VECTOREE_API_KEY') return undefined;
+    return currentVectoreeApiKey();
+  });
 }
 
 function expiredPreview(): PreviewRedeemResult {
@@ -175,16 +283,48 @@ function expiredPreview(): PreviewRedeemResult {
   };
 }
 
-function touchPreview(cookieHeader: string | undefined, now = Date.now()): PreviewCredentials | null {
+function previewCookie(env: NodeJS.ProcessEnv, secure: boolean, id: string): PreviewCookie {
+  return {
+    name: PREVIEW_COOKIE,
+    value: id,
+    options: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure,
+      path: publicCookiePath(env),
+      maxAge: COOKIE_MAX_AGE_MS,
+    },
+  };
+}
+
+function takePending(switchToken: unknown, now: number): { stored: StoredPreview; id: string } | null {
+  const id = typeof switchToken === 'string' ? switchToken : '';
+  if (!PREVIEW_ID.test(id)) return null;
+  const stored = previews.get(id);
+  if (!stored?.pending) return null;
+  if (now - stored.lastUsed > PENDING_MS) {
+    previews.delete(id);
+    return null;
+  }
+  return { stored, id };
+}
+
+function activeStored(cookieHeader: string | undefined, now = Date.now()): StoredPreview | null {
   const id = cookieValue(cookieHeader, PREVIEW_COOKIE);
   if (!id || !PREVIEW_ID.test(id)) return null;
   const stored = previews.get(id);
-  if (!stored) return null;
+  if (!stored || stored.pending) return null;
   if (now - stored.lastUsed > IDLE_MS) {
     previews.delete(id);
     return null;
   }
   stored.lastUsed = now;
+  return stored;
+}
+
+function touchPreview(cookieHeader: string | undefined, now = Date.now()): PreviewCredentials | null {
+  const stored = activeStored(cookieHeader, now);
+  if (!stored) return null;
   return { apiUrl: stored.apiUrl, apiKey: stored.apiKey, projectId: stored.projectId };
 }
 

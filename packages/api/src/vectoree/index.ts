@@ -1,6 +1,19 @@
-export { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
+export { createVectoreeAppAuth, linkVectoreeUser, previewIssuer, toVectoreeLinkedUser } from './appAuth';
 export { VectoreeConfigError } from './errors';
-export { bindRequestPreview, previewActive, redeemCloudPreview } from './preview';
+export {
+  assertCloudPreview,
+  bindPreviewOwner,
+  bindRequestPreview,
+  confirmCloudPreview,
+  currentVectoreeApiKey,
+  declineCloudPreview,
+  dropPreviewSession,
+  installCloudPreviewEnv,
+  PREVIEW_COOKIE,
+  previewActive,
+  publicCookiePath,
+  redeemCloudPreview,
+} from './preview';
 export { createVectoreeLink, publicDeploymentStatus, readVectoreeAppCredentials } from './link';
 export { readDeployMode, usesProjectLink } from './mode';
 export { configuredPublicOrigin } from './url';

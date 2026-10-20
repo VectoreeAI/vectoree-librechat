@@ -31,14 +31,21 @@ export function nextVectoreeGate(
   return 'app';
 }
 
-let redeemInflight: { ticket: string; promise: Promise<boolean> } | null = null;
+export type PreviewRedeemBody = {
+  projectId?: string;
+  projectName?: string;
+  confirm?: boolean;
+  switchToken?: string;
+};
 
-export function redeemPreviewTicketOnce(ticket: string): Promise<boolean> {
+let redeemInflight: { ticket: string; promise: Promise<PreviewRedeemBody | null> } | null = null;
+
+export function redeemPreviewTicketOnce(ticket: string): Promise<PreviewRedeemBody | null> {
   if (redeemInflight?.ticket === ticket) return redeemInflight.promise;
   const promise = redeemPreview(ticket)
     .then(
-      () => true,
-      () => false,
+      (body) => body,
+      () => null,
     )
     .finally(() => {
       if (redeemInflight?.ticket === ticket) redeemInflight = null;
@@ -54,21 +61,45 @@ export function forgetPreviewTicket(): void {
   window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
-export async function redeemPreview(ticket: string): Promise<{ projectId?: string }> {
-  const response = await fetch(vectoreeUrl('/api/vectoree/preview/redeem'), {
+function readPreviewBody(data: unknown): PreviewRedeemBody {
+  const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+  return {
+    ...(typeof record.projectId === 'string' ? { projectId: record.projectId } : {}),
+    ...(typeof record.projectName === 'string' ? { projectName: record.projectName } : {}),
+    ...(record.confirm === true ? { confirm: true } : {}),
+    ...(typeof record.switchToken === 'string' ? { switchToken: record.switchToken } : {}),
+  };
+}
+
+async function postPreview(path: string, body: Record<string, string>): Promise<PreviewRedeemBody> {
+  const response = await fetch(vectoreeUrl(path), {
     method: 'POST',
     credentials: 'same-origin',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ticket }),
+    body: JSON.stringify(body),
   });
   const data = await readJson(response);
   if (!response.ok) {
     const record = data && typeof data === 'object' ? (data as { message?: unknown }) : {};
-    const message = typeof record.message === 'string' ? record.message : 'This preview has expired. Open it again from Vectoree.';
+    const message =
+      typeof record.message === 'string'
+        ? record.message
+        : 'This preview has expired. Open it again from Vectoree.';
     throw new Error(message);
   }
-  const record = data && typeof data === 'object' ? (data as { projectId?: unknown }) : {};
-  return typeof record.projectId === 'string' ? { projectId: record.projectId } : {};
+  return readPreviewBody(data);
+}
+
+export async function redeemPreview(ticket: string): Promise<PreviewRedeemBody> {
+  return postPreview('/api/vectoree/preview/redeem', { ticket });
+}
+
+export async function confirmPreviewSwitch(switchToken: string): Promise<PreviewRedeemBody> {
+  return postPreview('/api/vectoree/preview/confirm', { switchToken });
+}
+
+export async function declinePreviewSwitch(switchToken: string): Promise<void> {
+  await postPreview('/api/vectoree/preview/decline', { switchToken });
 }
 
 export type VectoreeConnectSnapshot = {

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Spinner } from '@librechat/client';
+import { Button, Spinner } from '@librechat/client';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  confirmPreviewSwitch,
+  declinePreviewSwitch,
   forgetPreviewTicket,
   nextVectoreeGate,
   redeemPreviewTicketOnce,
@@ -10,6 +12,11 @@ import {
   vectoreeLinkStatusKey,
 } from '~/data-provider';
 import { useLocalize } from '~/hooks';
+
+type SwitchAsk = {
+  projectName: string;
+  switchToken: string;
+};
 
 function ticketInLocation(): string | null {
   return new URLSearchParams(window.location.search).get('ticket');
@@ -20,6 +27,8 @@ export default function VectoreeLinkGate() {
   const queryClient = useQueryClient();
   const status = useVectoreeLinkStatus();
   const [pendingTicket, setPendingTicket] = useState(() => Boolean(ticketInLocation()));
+  const [switchAsk, setSwitchAsk] = useState<SwitchAsk | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (status.isLoading) return;
@@ -33,15 +42,72 @@ export default function VectoreeLinkGate() {
       return;
     }
     let cancelled = false;
-    redeemPreviewTicketOnce(ticket).finally(async () => {
+    redeemPreviewTicketOnce(ticket).then(async (body) => {
+      if (cancelled) return;
+      if (body?.confirm && body.switchToken) {
+        setSwitchAsk({
+          projectName: body.projectName || body.projectId || '',
+          switchToken: body.switchToken,
+        });
+        forgetPreviewTicket();
+        return;
+      }
       await queryClient.invalidateQueries(vectoreeLinkStatusKey);
       forgetPreviewTicket();
-      if (!cancelled) setPendingTicket(false);
+      setPendingTicket(false);
     });
     return () => {
       cancelled = true;
     };
   }, [queryClient, status.data?.deployMode, status.isLoading]);
+
+  async function stayOnCurrentProject(): Promise<void> {
+    if (!switchAsk || busy) return;
+    setBusy(true);
+    try {
+      await declinePreviewSwitch(switchAsk.switchToken);
+      setSwitchAsk(null);
+      setPendingTicket(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function switchProject(): Promise<void> {
+    if (!switchAsk || busy) return;
+    setBusy(true);
+    try {
+      await confirmPreviewSwitch(switchAsk.switchToken);
+      await queryClient.invalidateQueries(vectoreeLinkStatusKey);
+      setSwitchAsk(null);
+      setPendingTicket(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (switchAsk) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-surface-primary px-6">
+        <div className="w-full max-w-md text-center">
+          <h1 className="text-xl text-text-primary">{localize('com_auth_vectoree_preview_switch')}</h1>
+          <p className="mt-3 text-sm text-text-secondary">
+            {localize('com_auth_vectoree_preview_switch_note', {
+              0: switchAsk.projectName,
+            })}
+          </p>
+          <div className="mt-6 flex flex-col gap-3">
+            <Button type="button" variant="submit" disabled={busy} onClick={() => void switchProject()}>
+              {localize('com_auth_vectoree_preview_switch_confirm')}
+            </Button>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => void stayOnCurrentProject()}>
+              {localize('com_auth_vectoree_preview_switch_stay')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const gate = nextVectoreeGate(status.data, pendingTicket, status.isError);
 

@@ -24,6 +24,24 @@ export function isSensitiveEnvVar(varName: string): boolean {
   return SENSITIVE_ENV_VARS.has(varName);
 }
 
+type RuntimeEnvReader = (name: string) => string | undefined;
+
+let runtimeEnvReader: RuntimeEnvReader | undefined;
+
+/**
+ * Lets the server resolve a placeholder from request state.
+ * A string result, including '', is final and is not replaced from process.env.
+ */
+export function setRuntimeEnvReader(reader: RuntimeEnvReader | undefined): void {
+  runtimeEnvReader = reader;
+}
+
+function readRuntimeEnv(name: string): string | undefined {
+  if (!runtimeEnvReader) return undefined;
+  const value = runtimeEnvReader(name);
+  return typeof value === 'string' ? value : undefined;
+}
+
 /** Extracts the environment variable name from a template literal string */
 export function extractVariableName(value: string): string | null {
   if (!value) {
@@ -48,6 +66,8 @@ export function extractEnvVariable(value: string) {
     if (isSensitiveEnvVar(varName)) {
       return trimmed;
     }
+    const runtime = readRuntimeEnv(varName);
+    if (runtime !== undefined) return runtime;
     return process.env[varName] || trimmed;
   }
 
@@ -69,7 +89,8 @@ export function extractEnvVariable(value: string) {
     if (isSensitiveEnvVar(varName)) {
       continue;
     }
-    const envValue = process.env[varName] || fullMatch;
+    const runtime = readRuntimeEnv(varName);
+    const envValue = runtime !== undefined ? runtime : process.env[varName] || fullMatch;
     result = result.substring(0, index) + envValue + result.substring(index + fullMatch.length);
   }
 
