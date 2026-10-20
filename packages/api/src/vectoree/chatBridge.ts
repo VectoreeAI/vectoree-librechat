@@ -1,7 +1,7 @@
 import type { JsonValue, StoredChatMessage, StoredConversation } from './chats';
 import type { VectoreeAppCredentials } from './appAuth';
 import type { VectoreeFetch } from './url';
-import { createVectoreeChats, isChatUuid } from './chats';
+import { createVectoreeChats, isChatUuid, sanitizeConversationCursor } from './chats';
 
 const OWNER_CACHE_TTL_MS = 60_000;
 const OWNER_CACHE_LIMIT = 200;
@@ -400,14 +400,16 @@ function decodeListCursor(cursor: string | null | undefined): ListCursor {
     };
     if (parsed && typeof parsed === 'object' && !('primary' in parsed) && ('v' in parsed || 'm' in parsed)) {
       return {
-        v: typeof parsed.v === 'string' ? parsed.v : null,
+        v: typeof parsed.v === 'string' ? sanitizeConversationCursor(parsed.v) : null,
         m: typeof parsed.m === 'string' ? parsed.m : null,
       };
     }
   } catch {
     // Not a composite cursor.
   }
-  if (cursor.includes('|') || /^\d{4}-\d{2}-\d{2}T/.test(cursor)) return { v: cursor, m: null };
+  if (cursor.includes('|') || sanitizeConversationCursor(cursor)) {
+    return { v: sanitizeConversationCursor(cursor), m: null };
+  }
   return { v: null, m: cursor };
 }
 

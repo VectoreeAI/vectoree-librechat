@@ -10,6 +10,8 @@
 #   测试：DEV_DEPLOY_HOST、DEV_DEPLOY_USER、DEV_DEPLOY_SSH_KEY、DEV_DEPLOY_PORT
 #   生产：DEPLOY_HOST、DEPLOY_USER、DEPLOY_SSH_KEY、DEPLOY_PORT
 # 私钥变量是一行 base64（无空白）：base64 < ~/.ssh/你的私钥 | tr -d '\n'
+# DEV_DEPLOY_*、DEPLOY_*、REGISTRY_PULL_TOKEN、GITHUB_TOKEN 必须设成 Masked 和 Protected。
+# unit 会在合并请求里执行依赖的安装脚本。这些变量没标 Protected 时，未受保护的分支能读到密钥。
 # 部署目录默认 /opt/vectoree-librechat，可用 DEV_DEPLOY_PATH / DEPLOY_PATH 覆盖。
 #
 # GitHub 仓库：https://github.com/VectoreeAI/vectoree-librechat.git
@@ -97,7 +99,7 @@ unit:
   before_script:
     - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates git python3 make g++ >/dev/null
   script:
-    - npm ci
+    - npm config set fetch-retries 5 && npm config set fetch-retry-factor 2 && npm config set fetch-retry-mintimeout 20000 && npm config set fetch-retry-maxtimeout 120000 && npm ci || { sleep 20 && npm ci; } || { sleep 20 && npm ci; }
     - npm run build:data-provider
     - npm run build:data-schemas
     - npm run build:api
@@ -177,6 +179,7 @@ unit:
 
       echo "=== Login GitLab Container Registry ==="
       echo "$CI_REGISTRY_PASSWORD" | sudo docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+      trap 'sudo docker logout "$CI_REGISTRY" >/dev/null 2>&1 || true' EXIT
 
       echo "=== Disk space ==="
       df -h
@@ -185,7 +188,6 @@ unit:
       echo "=== Pull images / deploy ==="
       export LIBRECHAT_IMAGE VECTOREE_API_URL="$DEPLOY_API_BASE_URL" DEPLOY_MODE=cloud
       sudo -E bash "$DEPLOY_PATH/deploy/deploy-remote.sh"
-      sudo docker logout "$CI_REGISTRY" || true
       echo "=== Done ==="
       REMOTE
   after_script:

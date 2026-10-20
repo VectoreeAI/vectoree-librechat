@@ -132,6 +132,26 @@ describe('vectoree chats', () => {
     });
     expect(urls.some((url) => url.includes('or=') && url.includes('id.lt.'))).toBe(true);
   });
+
+  test('drops a conversation cursor whose timestamp is not ISO', async () => {
+    const urls: string[] = [];
+    const fetchImpl = jest.fn(async (url: string) => {
+      urls.push(url);
+      const path = new URL(url).pathname;
+      if (path === '/api/database/tables') return jsonResponse(['librechat_conversations', 'librechat_messages']);
+      return jsonResponse([]);
+    });
+    const chats = createVectoreeChats({
+      credentials: () => ({ apiUrl: API, apiKey: KEY }),
+      fetchImpl,
+    });
+    await chats.listConversations('app-user', 'mongo-user', {
+      cursor: `2026-01-02T00:00:00.000Z),id.eq.other|${CONVO}`,
+    });
+    const listUrl = urls.find((url) => url.includes('/librechat_conversations')) ?? '';
+    expect(listUrl.includes('or=')).toBe(false);
+    expect(listUrl.includes('other')).toBe(false);
+  });
 });
 
 describe('vectoree chat bridge', () => {

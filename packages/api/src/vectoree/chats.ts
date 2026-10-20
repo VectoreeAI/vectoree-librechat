@@ -5,6 +5,7 @@ import { readErrorMessage } from './text';
 const CONVERSATIONS = 'librechat_conversations';
 const MESSAGES = 'librechat_messages';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 const MESSAGE_PAGE = 200;
 const MAX_MESSAGE_PAGES = 50;
 
@@ -460,9 +461,19 @@ function readConversationCursor(cursor: string | null | undefined): { updatedAt:
   if (splitAt > 0) {
     const updatedAt = cursor.slice(0, splitAt);
     const id = cursor.slice(splitAt + 1);
-    if (updatedAt && UUID.test(id)) return { updatedAt, id };
+    if (isChatTimestamp(updatedAt) && UUID.test(id)) return { updatedAt, id };
+    return null;
   }
+  if (!isChatTimestamp(cursor)) return null;
   return { updatedAt: cursor };
+}
+
+export function sanitizeConversationCursor(cursor: string | null | undefined): string | null {
+  return readConversationCursor(cursor) ? cursor ?? null : null;
+}
+
+function isChatTimestamp(value: string): boolean {
+  return ISO_TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 function sanitizeSearch(value: string | undefined): string {
