@@ -404,6 +404,15 @@ registration:
 # When a forward proxy is configured (PROXY / HTTP(S)_PROXY), it performs DNS and egress in its
 # own network context, so these requests are delegated to it and it must be SSRF-enforcing; the
 # connect-time guard only covers direct, non-proxied connections.
+# Read-aloud uses the same Vectoree speech model as DeerFlow: sesame/csm-1b, voice alloy.
+speech:
+  tts:
+    openai:
+      url: '${VECTOREE_API_BASE}/audio/speech'
+      apiKey: '${VECTOREE_API_KEY}'
+      model: '${VECTOREE_SPEECH_MODEL}'
+      voices:
+        - '${VECTOREE_SPEECH_VOICE}'
 # speech:
 #   tts:
 #     openai:

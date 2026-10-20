@@ -1,7 +1,13 @@
 export { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
 export { VectoreeConfigError } from './errors';
 export { createVectoreeLink } from './link';
-export { prepareVectoreeStartup } from './store';
+export {
+  applyGenerationDefaults,
+  prepareVectoreeStartup,
+  VECTOREE_IMAGE_MODEL_DEFAULT,
+  VECTOREE_SPEECH_MODEL_DEFAULT,
+  VECTOREE_SPEECH_VOICE_DEFAULT,
+} from './store';
 export type {
   AppAuthOutcome,
   AppAuthSubmitInput,

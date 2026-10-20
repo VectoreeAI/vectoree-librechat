@@ -76,8 +76,10 @@ class TTSService {
    * @returns {Promise<string>} The selected voice.
    */
   async getVoice(providerSchema, requestVoice) {
-    const voices = providerSchema.voices.filter((voice) => voice && voice.toUpperCase() !== 'ALL');
-    let voice = requestVoice;
+    const voices = providerSchema.voices
+      .map((voice) => extractEnvVariable(voice))
+      .filter((voice) => voice && !voice.includes('${') && voice.toUpperCase() !== 'ALL');
+    let voice = requestVoice ? extractEnvVariable(requestVoice) : requestVoice;
     if (!voice || !voices.includes(voice) || (voice.toUpperCase() === 'ALL' && voices.length > 1)) {
       voice = getRandomVoiceId(voices);
     }
@@ -110,21 +112,24 @@ class TTSService {
    * @throws {Error} If the selected voice is not available.
    */
   openAIProvider(ttsSchema, input, voice) {
-    const url = ttsSchema?.url || 'https://api.openai.com/v1/audio/speech';
+    const url = ttsSchema?.url
+      ? extractEnvVariable(ttsSchema.url)
+      : 'https://api.openai.com/v1/audio/speech';
+    const voices = (ttsSchema?.voices ?? []).map((item) => extractEnvVariable(item));
+    const selectedVoice = voice ? extractEnvVariable(voice) : voice;
 
     if (
-      ttsSchema?.voices &&
-      ttsSchema.voices.length > 0 &&
-      !ttsSchema.voices.includes(voice) &&
-      !ttsSchema.voices.includes('ALL')
+      voices.length > 0 &&
+      !voices.includes(selectedVoice) &&
+      !voices.includes('ALL')
     ) {
-      throw new Error(`Voice ${voice} is not available.`);
+      throw new Error(`Voice ${selectedVoice} is not available.`);
     }
 
     const data = {
       input,
-      model: ttsSchema?.model,
-      voice: ttsSchema?.voices && ttsSchema.voices.length > 0 ? voice : undefined,
+      model: ttsSchema?.model ? extractEnvVariable(ttsSchema.model) : ttsSchema?.model,
+      voice: voices.length > 0 ? selectedVoice : undefined,
       backend: ttsSchema?.backend,
     };
 
