@@ -322,6 +322,8 @@
   "com_auth_vectoree_reset_failed": "Could not reset password",
   "com_auth_vectoree_reset_missing": "Open the reset link from your email, or request a new one.",
   "com_auth_vectoree_pending": "Waiting for Vectoree login",
+  "com_auth_vectoree_preview_expired": "This preview has expired",
+  "com_auth_vectoree_preview_expired_note": "Open LibreChat again from Vectoree. Each preview link is used once.",
   "com_auth_vectoree_redirecting": "Redirecting to sign in",
   "com_auth_vectoree_project": "Project ID or Console URL",
   "com_auth_vectoree_project_invalid": "Paste a project UUID or a Console URL that contains one",

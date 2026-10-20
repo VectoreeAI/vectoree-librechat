@@ -9,6 +9,8 @@ const mockLink = {
   appCredentials: jest.fn(),
 };
 
+const mockUsesProjectLink = jest.fn(() => true);
+
 jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn(), info: jest.fn(), warn: jest.fn(), debug: jest.fn() },
 }));
@@ -19,8 +21,12 @@ jest.mock('@librechat/api', () => ({
   getBalanceConfig: jest.fn(),
   isEmailDomainAllowed: jest.fn(),
   linkVectoreeUser: jest.fn(),
+  previewActive: jest.fn(() => false),
   preAuthTenantMiddleware: (req, res, next) => next(),
+  publicDeploymentStatus: (_env, linked) => ({ ...linked, deployMode: 'local', previewed: false }),
+  redeemCloudPreview: jest.fn(),
   toVectoreeLinkedUser: jest.fn(),
+  usesProjectLink: mockUsesProjectLink,
 }));
 
 jest.mock('~/server/services/twoFactorService', () => ({ generate2FATempToken: jest.fn() }));
@@ -67,6 +73,7 @@ describe('Vectoree link routes', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUsesProjectLink.mockReturnValue(true);
     mockLink.start.mockReturnValue({ status: 'pending' });
   });
 
@@ -110,6 +117,16 @@ describe('Vectoree link routes', () => {
 
     expect(response.status).toBe(200);
     expect(mockLink.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a link when DEPLOY_MODE is cloud', async () => {
+    mockUsesProjectLink.mockReturnValue(false);
+
+    const response = await request(app).post('/api/vectoree/link/start').send(body);
+
+    expect(response.status).toBe(404);
+    expect(response.body.message).toBe('Link is not used when DEPLOY_MODE=cloud');
+    expect(mockLink.start).not.toHaveBeenCalled();
   });
 
   it('fails closed when the link status cannot be read', async () => {

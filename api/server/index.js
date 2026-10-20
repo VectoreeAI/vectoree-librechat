@@ -60,6 +60,7 @@ const {
   waitForKeyvRedisClient,
   warnOnUnreachableDeliveryPaths,
   createCodeApiUploadRegistry,
+  bindRequestPreview,
 } = require('@librechat/api');
 const { connectDb, indexSync } = require('~/db');
 const {
@@ -352,6 +353,9 @@ const startServer = async () => {
   app.use(mongoSanitize());
   app.use(cors());
   app.use(cookieParser());
+  app.use((req, _res, next) => {
+    bindRequestPreview(req.headers.cookie, next);
+  });
 
   if (!isEnabled(DISABLE_COMPRESSION)) {
     app.use(compression());

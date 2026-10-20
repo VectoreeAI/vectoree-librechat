@@ -6,6 +6,7 @@ import {
   TwoFactorScreen,
   RequestPasswordReset,
 } from '~/components/Auth';
+import VectoreePreviewExpired from '~/components/Auth/VectoreePreviewExpired';
 import { MarketplaceProvider } from '~/components/Agents/MarketplaceContext';
 import VectoreeLinkGate from '~/components/Auth/VectoreeLinkGate';
 import AgentMarketplace from '~/components/Agents/Marketplace';
@@ -65,6 +66,11 @@ export const router = createBrowserRouter(
     {
       path: 'link',
       element: <VectoreeLink />,
+      errorElement: <RouteErrorBoundary />,
+    },
+    {
+      path: 'preview-expired',
+      element: <VectoreePreviewExpired />,
       errorElement: <RouteErrorBoundary />,
     },
     {

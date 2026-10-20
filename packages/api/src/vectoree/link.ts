@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { VectoreeFetch } from './url';
+import type { DeployMode } from './mode';
 import {
   assertLinkRootWritable,
   hydrateProcessEnv,
@@ -8,8 +9,10 @@ import {
   resolveLinkDataRoot,
 } from './store';
 import { DEFAULT_API_URL, configuredPublicOrigin, extractProjectId, normalizeApiUrl } from './url';
+import { currentPreviewCredentials } from './preview';
 import { VectoreeConfigError } from './errors';
 import { exchangeAndMint } from './oauth';
+import { readDeployMode } from './mode';
 import { redactSecrets } from './text';
 
 const LINK_TIMEOUT_MS = 180_000;
@@ -17,11 +20,26 @@ const LINK_TIMEOUT_MS = 180_000;
 export function readVectoreeAppCredentials(
   env: NodeJS.ProcessEnv,
   projectRoot: string,
+  linkDataRoot?: string,
 ): { apiUrl: string; apiKey: string } | null {
-  const root = resolveLinkDataRoot(env, projectRoot);
+  if (readDeployMode(env) === 'cloud') {
+    const preview = currentPreviewCredentials();
+    return preview ? { apiUrl: preview.apiUrl, apiKey: preview.apiKey } : null;
+  }
+  const root = linkDataRoot ?? resolveLinkDataRoot(env, projectRoot);
   const signal = readLinkSignal(root, projectRoot, env);
   if (!signal.apiKey) return null;
   return { apiUrl: signal.apiUrl ?? DEFAULT_API_URL, apiKey: signal.apiKey };
+}
+
+export function publicDeploymentStatus(
+  env: NodeJS.ProcessEnv,
+  linked: VectoreeLinkStatus,
+  previewed: boolean,
+): VectoreeLinkStatus & { deployMode: DeployMode; previewed: boolean } {
+  const deployMode = readDeployMode(env);
+  if (deployMode === 'cloud') return { linked: false, deployMode, previewed };
+  return { ...linked, deployMode, previewed: false };
 }
 
 export type VectoreeLinkStatus = {
@@ -83,9 +101,7 @@ export function createVectoreeLink(options: VectoreeLinkOptions) {
       return publicStatus(readLinkSignal(root, options.projectRoot, options.env));
     },
     appCredentials(): { apiUrl: string; apiKey: string } | null {
-      const signal = readLinkSignal(root, options.projectRoot, options.env);
-      if (!signal.apiKey) return null;
-      return { apiUrl: signal.apiUrl ?? DEFAULT_API_URL, apiKey: signal.apiKey };
+      return readVectoreeAppCredentials(options.env, options.projectRoot, root);
     },
     poll(): VectoreeConnectSnapshot {
       expirePending();

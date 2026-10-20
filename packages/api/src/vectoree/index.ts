@@ -1,6 +1,8 @@
 export { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
 export { VectoreeConfigError } from './errors';
-export { createVectoreeLink, readVectoreeAppCredentials } from './link';
+export { bindRequestPreview, previewActive, redeemCloudPreview } from './preview';
+export { createVectoreeLink, publicDeploymentStatus, readVectoreeAppCredentials } from './link';
+export { readDeployMode, usesProjectLink } from './mode';
 export { configuredPublicOrigin } from './url';
 export { createVectoreeChatBridge } from './chatBridge';
 export { createVectoreeChats } from './chats';
