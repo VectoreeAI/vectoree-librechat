@@ -71,6 +71,16 @@ ensure_secret JWT_REFRESH_SECRET 32
 ensure_secret CREDS_KEY 32
 ensure_secret CREDS_IV 16
 
+# The image runs as uid 1000. A root-owned mode 600 mount is visible but not readable.
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown 1000:1000 .env
+  if [[ -f librechat.example.yaml ]]; then
+    chown 1000:1000 librechat.example.yaml
+    chmod 644 librechat.example.yaml
+  fi
+fi
+chmod 600 .env
+
 if [[ -z "$(read_dotenv LIBRECHAT_IMAGE)" ]]; then
   echo "Set LIBRECHAT_IMAGE in .env"
   exit 1
