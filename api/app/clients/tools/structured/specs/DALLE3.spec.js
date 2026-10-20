@@ -73,7 +73,37 @@ describe('DALLE3', () => {
   it('should throw an error if all potential API keys are missing', () => {
     delete process.env.DALLE3_API_KEY;
     delete process.env.DALLE_API_KEY;
+    delete process.env.VECTOREE_API_KEY;
     expect(() => new DALLE3()).toThrow('Missing DALLE_API_KEY environment variable.');
+  });
+
+  it('sends the DeerFlow image model to the Vectoree images API', async () => {
+    delete process.env.DALLE3_API_KEY;
+    delete process.env.DALLE_API_KEY;
+    delete process.env.DALLE_REVERSE_PROXY;
+    process.env.VECTOREE_API_KEY = 'sk-ve-test';
+    process.env.VECTOREE_API_BASE = 'https://vectoree.ai/api/v1';
+    delete process.env.VECTOREE_IMAGE_MODEL;
+    const vectoree = new DALLE3({ processFileURL });
+    generate.mockResolvedValue({
+      data: [{ b64_json: Buffer.from('png').toString('base64') }],
+    });
+    processFileURL.mockResolvedValue({ filepath: '/images/out.png' });
+
+    await vectoree._call({ prompt: 'a cat', size: '1024x1024' });
+
+    expect(OpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'sk-ve-test',
+        baseURL: 'https://vectoree.ai/api/v1',
+      }),
+    );
+    expect(generate).toHaveBeenCalledWith({
+      model: 'bytedance-seed/seedream-5-0-pro',
+      prompt: 'a cat',
+      n: 1,
+      size: '1024x1024',
+    });
   });
 
   it('should replace unwanted characters in input string', () => {

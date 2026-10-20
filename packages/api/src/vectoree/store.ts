@@ -138,11 +138,22 @@ export function clearUserProvidedOpenAI(projectRoot: string, env: NodeJS.Process
   }
 }
 
+export const VECTOREE_IMAGE_MODEL_DEFAULT = 'bytedance-seed/seedream-5-0-pro';
+export const VECTOREE_SPEECH_MODEL_DEFAULT = 'sesame/csm-1b';
+export const VECTOREE_SPEECH_VOICE_DEFAULT = 'alloy';
+
+export function applyGenerationDefaults(env: NodeJS.ProcessEnv): void {
+  if (!nonEmpty(env.VECTOREE_IMAGE_MODEL)) env.VECTOREE_IMAGE_MODEL = VECTOREE_IMAGE_MODEL_DEFAULT;
+  if (!nonEmpty(env.VECTOREE_SPEECH_MODEL)) env.VECTOREE_SPEECH_MODEL = VECTOREE_SPEECH_MODEL_DEFAULT;
+  if (!nonEmpty(env.VECTOREE_SPEECH_VOICE)) env.VECTOREE_SPEECH_VOICE = VECTOREE_SPEECH_VOICE_DEFAULT;
+}
+
 export function prepareVectoreeStartup(options: {
   env: NodeJS.ProcessEnv;
   projectRoot: string;
   linkDataRoot?: string;
 }): void {
+  applyGenerationDefaults(options.env);
   const root = options.linkDataRoot ?? resolveLinkDataRoot(options.env, options.projectRoot);
   hydrateProcessEnv(root, options.projectRoot, options.env);
 }

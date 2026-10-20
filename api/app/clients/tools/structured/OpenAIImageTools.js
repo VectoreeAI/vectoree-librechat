@@ -71,8 +71,9 @@ function createOpenAIImageTools(fields = {}) {
   const imageOutputType = fields.imageOutputType || EImageOutputType.PNG;
   const appFileStrategy = fields.fileStrategy;
 
+  const dedicatedImage = Boolean(process.env.IMAGE_GEN_OAI_API_KEY);
   const getApiKey = () => {
-    const apiKey = process.env.IMAGE_GEN_OAI_API_KEY ?? '';
+    const apiKey = process.env.IMAGE_GEN_OAI_API_KEY || process.env.VECTOREE_API_KEY || '';
     if (!apiKey && !override) {
       throw new Error('Missing IMAGE_GEN_OAI_API_KEY environment variable.');
     }
@@ -82,11 +83,18 @@ function createOpenAIImageTools(fields = {}) {
   let apiKey = fields.IMAGE_GEN_OAI_API_KEY ?? getApiKey();
   const closureConfig = { apiKey };
 
-  const imageModel = process.env.IMAGE_GEN_OAI_MODEL || 'gpt-image-1';
+  const imageModel =
+    process.env.IMAGE_GEN_OAI_MODEL ||
+    (dedicatedImage
+      ? 'gpt-image-1'
+      : process.env.VECTOREE_IMAGE_MODEL || 'bytedance-seed/seedream-5-0-pro');
 
   let baseURL = 'https://api.openai.com/v1/';
   if (!override && process.env.IMAGE_GEN_OAI_BASEURL) {
     baseURL = extractBaseURL(process.env.IMAGE_GEN_OAI_BASEURL);
+    closureConfig.baseURL = baseURL;
+  } else if (!override && !dedicatedImage && process.env.VECTOREE_API_BASE) {
+    baseURL = `${process.env.VECTOREE_API_BASE.replace(/\/$/, '')}/`;
     closureConfig.baseURL = baseURL;
   }
 
@@ -161,20 +169,29 @@ function createOpenAIImageTools(fields = {}) {
           derivedSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
+        const vectoreeImage = !process.env.IMAGE_GEN_OAI_API_KEY && process.env.VECTOREE_API_KEY;
+        const count = Math.min(Math.max(1, n), 10);
         resp = await openai.images.generate(
-          {
-            model: imageModel,
-            prompt: replaceUnwantedChars(prompt),
-            n: Math.min(Math.max(1, n), 10),
-            background,
-            output_format,
-            output_compression:
-              output_format === EImageOutputType.WEBP || output_format === EImageOutputType.JPEG
-                ? output_compression
-                : undefined,
-            quality,
-            size,
-          },
+          vectoreeImage
+            ? {
+                model: imageModel,
+                prompt: replaceUnwantedChars(prompt),
+                n: count,
+                size: !size || size === 'auto' ? '1024x1024' : size,
+              }
+            : {
+                model: imageModel,
+                prompt: replaceUnwantedChars(prompt),
+                n: count,
+                background,
+                output_format,
+                output_compression:
+                  output_format === EImageOutputType.WEBP || output_format === EImageOutputType.JPEG
+                    ? output_compression
+                    : undefined,
+                quality,
+                size,
+              },
           {
             signal: derivedSignal,
           },
@@ -198,9 +215,12 @@ Error Message: ${error.message}`);
 
       // For gpt-image-1, the response contains base64-encoded images
       // TODO: handle cost in `resp.usage`
-      const base64Image = resp.data[0].b64_json;
+      const generated = resp.data[0];
+      const imageUrl = generated.b64_json
+        ? `data:image/${output_format};base64,${generated.b64_json}`
+        : generated.url;
 
-      if (!base64Image) {
+      if (!imageUrl) {
         return returnValue(
           'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
         );
@@ -210,7 +230,7 @@ Error Message: ${error.message}`);
         {
           type: ContentTypes.IMAGE_URL,
           image_url: {
-            url: `data:image/${output_format};base64,${base64Image}`,
+            url: imageUrl,
           },
         },
       ];
