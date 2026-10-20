@@ -23,8 +23,8 @@ const matchesSecret = (text) => {
   return result.status === 0;
 };
 
-test('pipeline has no deploy path and injects the GitHub token into the publish URL', () => {
-  assert.match(ciText, /^stages:\n  - \.pre\n  - check\n  - publish\n/m);
+test('pipeline deploys dev and main and injects the GitHub token into the publish URL', () => {
+  assert.match(ciText, /^stages:\n  - \.pre\n  - check\n  - deploy\n  - publish\n/m);
   for (const rule of [
     '$CI_PIPELINE_SOURCE == "merge_request_event"',
     '$CI_COMMIT_BRANCH == "dev"',
@@ -33,19 +33,7 @@ test('pipeline has no deploy path and injects the GitHub token into the publish 
   ]) {
     assert.ok(ciText.includes(rule), rule);
   }
-  for (const forbidden of [
-    'deploy_development',
-    'deploy_production',
-    '.deploy',
-    'docker login',
-    'docker build',
-    'docker push',
-    'ssh ',
-    'scp ',
-    'set -x',
-  ]) {
-    assert.equal(ciText.includes(forbidden), false, forbidden);
-  }
+  assert.equal(ciText.includes('set -x'), false);
   assert.deepEqual(ciText.match(/:\/\/[^\s/]+@/g), [
     '://gitlab-ci-token:${CI_JOB_TOKEN}@',
     '://x-access-token:${GITHUB_TOKEN}@',
@@ -74,8 +62,26 @@ test('backup_main records the previous main without interpolating the message', 
   assert.match(backup, /git push origin HEAD:refs\/heads\/main-backup/);
 });
 
+test('dev deploys after tests and main deploys after the backup', () => {
+  const shared = job('.deploy', 'deploy_development');
+  const dev = job('deploy_development', 'deploy_production');
+  const prod = job('deploy_production', 'publish_github');
+  assert.match(shared, /stage: deploy/);
+  assert.match(shared, /\/opt\/vectoree-librechat/);
+  assert.match(shared, /docker build -f Dockerfile/);
+  assert.match(shared, /docker push "\$LIBRECHAT_IMAGE"/);
+  assert.match(shared, /docker login "\$CI_REGISTRY"/);
+  assert.match(dev, /extends: \.deploy/);
+  assert.match(dev, /resource_group: librechat-development-deploy/);
+  assert.match(dev, /\$CI_COMMIT_BRANCH == "dev"/);
+  assert.match(dev, /\$\{CI_REGISTRY_IMAGE\}\/api:dev/);
+  assert.match(prod, /resource_group: librechat-production-deploy/);
+  assert.match(prod, /\$CI_COMMIT_BRANCH == "main"/);
+  assert.match(prod, /needs:\n {4}- test\n {4}- backup_main/);
+});
+
 test('test job runs only the pipeline contract test', () => {
-  const check = job('test', 'publish_github');
+  const check = job('test', '.deploy');
   assert.match(check, /image: node:24\.16\.0-bookworm-slim/);
   assert.match(check, /timeout: 10m/);
   for (const rule of [
