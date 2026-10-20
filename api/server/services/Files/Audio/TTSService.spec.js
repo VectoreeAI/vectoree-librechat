@@ -26,6 +26,8 @@ jest.mock('./streamAudio', () => ({
 jest.mock('~/server/services/Config', () => ({ getAppConfig: jest.fn() }));
 
 const { resolveConfigSecret } = require('@librechat/api');
+const { extractEnvVariable } = require('librechat-data-provider');
+const { getRandomVoiceId } = require('./streamAudio');
 const { TTSService, getProvider } = require('./TTSService');
 
 describe('TTSService provider header construction with an undecryptable apiKey', () => {
@@ -34,6 +36,19 @@ describe('TTSService provider header construction with an undecryptable apiKey',
   beforeEach(() => {
     service = new TTSService();
     resolveConfigSecret.mockReset();
+  });
+
+  it('does not expand a voice supplied by the request', async () => {
+    extractEnvVariable.mockImplementation((value) =>
+      value === '${VECTOREE_API_KEY}' ? 'sk-ve-secret' : value,
+    );
+    getRandomVoiceId.mockReturnValue('alloy');
+    const voice = await service.getVoice(
+      { voices: ['alloy', '${VECTOREE_API_KEY}'] },
+      '${VECTOREE_API_KEY}',
+    );
+    expect(voice).toBe('alloy');
+    extractEnvVariable.mockImplementation((value) => value);
   });
 
   it('omits the Authorization header for openAIProvider instead of sending "Bearer undefined"', () => {

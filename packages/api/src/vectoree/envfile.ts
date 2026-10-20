@@ -7,8 +7,9 @@ export function parseEnvFile(file: string): Record<string, string> {
   try {
     return parseEnv(fs.readFileSync(file, 'utf8'));
   } catch (error) {
-    const code = error instanceof Error && 'code' in error ? String(error.code) : '';
-    if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') return {};
+    const code =
+      error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+    if (code === 'ENOENT' || code === 'ENOTDIR') return {};
     throw error;
   }
 }

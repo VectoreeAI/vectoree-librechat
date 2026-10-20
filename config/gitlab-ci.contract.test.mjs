@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
@@ -77,11 +77,11 @@ test('dev deploys after tests and main deploys after the backup', () => {
   assert.match(dev, /\$\{CI_REGISTRY_IMAGE\}\/api:dev/);
   assert.match(prod, /resource_group: librechat-production-deploy/);
   assert.match(prod, /\$CI_COMMIT_BRANCH == "main"/);
-  assert.match(prod, /needs:\n {4}- test\n {4}- backup_main/);
+  assert.match(prod, /needs:\n {4}- test\n {4}- unit\n {4}- backup_main/);
 });
 
 test('test job runs only the pipeline contract test', () => {
-  const check = job('test', '.deploy');
+  const check = job('test', 'unit');
   assert.match(check, /image: node:24\.16\.0-bookworm-slim/);
   assert.match(check, /timeout: 10m/);
   for (const rule of [
@@ -166,4 +166,60 @@ test('local tool directories are ignored and untracked', () => {
     { cwd: root, encoding: 'utf8' },
   );
   assert.equal(tracked, '');
+});
+
+test('gitignore does not hide source behind an unanchored directory name', () => {
+  const allowed = new Set([
+    'data',
+    'build',
+    'dist',
+    'node_modules',
+    'meili_data',
+    'bower_components',
+    'uploads',
+    'release',
+    '.swarm',
+    '.hive-mind',
+    '.claude-flow',
+    '.vectoree',
+    '.agent',
+    '.agents',
+    'openspec',
+    '.bg-shell',
+  ]);
+  const found = [];
+  for (const raw of readFileSync(path.join(root, '.gitignore'), 'utf8').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('!') || !line.endsWith('/')) continue;
+    const body = line.slice(0, -1);
+    if (body.includes('/')) continue;
+    found.push(body);
+    assert.equal(allowed.has(body), true, `unanchored ignore ${line}`);
+  }
+  assert.equal(found.includes('prompts'), false);
+
+  for (const file of [
+    'packages/api/src/prompts/index.ts',
+    'api/app/clients/prompts/index.js',
+    'client/src/components/Prompts/index.ts',
+    'client/src/hooks/Prompts/index.ts',
+  ]) {
+    assert.equal(
+      execFileSync('git', ['ls-files', '--error-unmatch', '--', file], {
+        cwd: root,
+        encoding: 'utf8',
+      }).trim().length > 0,
+      true,
+      file,
+    );
+  }
+  for (const file of [
+    'packages/api/src/types/es2024-string.d.ts',
+    'packages/api/src/types/proxy-from-env.d.ts',
+    'packages/data-schemas/src/types/winston-transports.d.ts',
+  ]) {
+    assert.equal(existsSync(path.join(root, file)), true, file);
+    const ignored = spawnSync('git', ['check-ignore', '-q', '--', file], { cwd: root });
+    assert.equal(ignored.status, 1, file);
+  }
 });

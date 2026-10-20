@@ -38,3 +38,24 @@ export function normalizeApiUrl(input: string): string {
 export function apiBaseFromOrigin(apiUrl: string): string {
   return `${normalizeApiUrl(apiUrl)}/api/v1`;
 }
+
+export type VectoreeFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+/** Public LibreChat origin from config. Request Host is not a source: a reset link built from it can be pointed at another domain. */
+export function configuredPublicOrigin(env: NodeJS.ProcessEnv): string | null {
+  return httpsOrigin(env.DOMAIN_CLIENT) ?? httpsOrigin(env.DOMAIN_SERVER);
+}
+
+function httpsOrigin(value: string | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('https://')) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
+    return `${url.origin}${path}`;
+  } catch {
+    return null;
+  }
+}

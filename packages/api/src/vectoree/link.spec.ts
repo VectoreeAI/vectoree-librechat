@@ -125,7 +125,7 @@ describe('vectoree link', () => {
       env,
       projectRoot,
       linkDataRoot: root,
-      fetchImpl: fetchImpl as typeof fetch,
+      fetchImpl,
       onLinked,
     });
     const started = link.start({
@@ -163,6 +163,44 @@ describe('vectoree link', () => {
     expect(serialized).not.toContain('sk-ve-');
     expect(serialized).not.toContain('jwt-access');
     expect(serialized).not.toContain('jwt-refresh');
+  });
+
+  test('stores the configured https reset origin on the project allowlist', async () => {
+    const root = tempRoot();
+    const projectRoot = tempRoot();
+    const env: NodeJS.ProcessEnv = { DOMAIN_CLIENT: 'https://vectoree.net/librechat/' };
+    const puts: unknown[] = [];
+    const fetchImpl = jest.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.endsWith('/api/system/auth/cli/token')) {
+        return response({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh' });
+      }
+      if (href.endsWith('/api/projects')) return response([{ id: PROJECT_ID, name: 'Demo' }]);
+      if (href.endsWith('/api/gateway/keys')) return response({ apiKey: 'sk-ve-v1-minted', id: 'key-1' });
+      if (href.endsWith('/api/auth/config') && (init?.method ?? 'GET') === 'GET') {
+        return response({ allowedRedirectUrls: ['https://existing.example/**'] });
+      }
+      if (href.endsWith('/api/auth/config') && init?.method === 'PUT') {
+        puts.push(JSON.parse(String(init.body)));
+        return response({ allowedRedirectUrls: [] });
+      }
+      throw new Error(`unexpected ${href}`);
+    });
+    const link = createVectoreeLink({
+      env,
+      projectRoot,
+      linkDataRoot: root,
+      fetchImpl,
+    });
+    const started = link.start({ projectId: PROJECT_ID, publicOrigin: 'http://evil.example' });
+    const state = new URL(started.authorizeUrl ?? '').searchParams.get('state') ?? '';
+    const html = await link.callback({ code: 'auth-code', state });
+    expect(html).toContain('Vectoree connected');
+    expect(puts).toEqual([
+      {
+        allowedRedirectUrls: ['https://existing.example/**', 'https://vectoree.net/librechat/reset-password**'],
+      },
+    ]);
   });
 
   test('expires a pending login', async () => {

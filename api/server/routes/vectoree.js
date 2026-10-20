@@ -1,6 +1,7 @@
 const express = require('express');
 const { logger } = require('@librechat/data-schemas');
 const {
+  configuredPublicOrigin,
   createVectoreeAppAuth,
   createVectoreeLink,
   getBalanceConfig,
@@ -44,6 +45,12 @@ function publicOrigin(req) {
     (typeof forwardedProto === 'string' && forwardedProto.split(',')[0].trim()) || req.protocol || 'http';
   const host = req.get('x-forwarded-host') || req.get('host');
   return `${proto}://${host}`;
+}
+
+function resetRedirect(action) {
+  if (action !== 'send-reset') return undefined;
+  const origin = configuredPublicOrigin(process.env);
+  return origin ? `${origin}/reset-password` : null;
 }
 
 function sendError(res, error) {
@@ -124,13 +131,19 @@ router.post(
   async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const redirectTo = resetRedirect(body.action);
+      if (redirectTo === null) {
+        return res.status(400).json({
+          message: 'Set DOMAIN_CLIENT or DOMAIN_SERVER to an https address before sending a reset link',
+        });
+      }
       const outcome = await appAuth.submit({
         action: body.action,
         email: body.email,
         password: body.password,
         otp: body.otp,
         code: body.code,
-        redirectTo: body.action === 'send-reset' ? `${publicOrigin(req)}/reset-password` : undefined,
+        redirectTo,
       });
       if (outcome.kind === 'response') {
         return res.status(outcome.status).json(outcome.body);

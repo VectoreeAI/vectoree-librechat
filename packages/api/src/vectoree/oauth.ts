@@ -1,4 +1,5 @@
 import os from 'node:os';
+import type { VectoreeFetch } from './url';
 import { VectoreeConfigError } from './errors';
 import { readErrorMessage } from './text';
 import { readDeviceId } from './store';
@@ -15,7 +16,7 @@ export type MintedSession = {
 };
 
 export async function exchangeAndMint(
-  fetchImpl: typeof fetch,
+  fetchImpl: VectoreeFetch,
   input: {
     apiUrl: string;
     projectId: string;
@@ -50,7 +51,7 @@ export async function exchangeAndMint(
 }
 
 async function exchangeCode(
-  fetchImpl: typeof fetch,
+  fetchImpl: VectoreeFetch,
   apiUrl: string,
   body: { code: string; codeVerifier: string; redirectUri: string },
 ): Promise<{ accessToken: string; refreshToken?: string }> {
@@ -82,7 +83,7 @@ async function exchangeCode(
 }
 
 async function lookupProjectName(
-  fetchImpl: typeof fetch,
+  fetchImpl: VectoreeFetch,
   apiUrl: string,
   accessToken: string,
   projectId: string,
@@ -107,7 +108,7 @@ async function lookupProjectName(
 }
 
 async function mintProjectKey(
-  fetchImpl: typeof fetch,
+  fetchImpl: VectoreeFetch,
   apiUrl: string,
   accessToken: string,
   input: { projectId: string; root: string },

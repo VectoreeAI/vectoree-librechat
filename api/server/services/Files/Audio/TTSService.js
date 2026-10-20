@@ -79,7 +79,7 @@ class TTSService {
     const voices = providerSchema.voices
       .map((voice) => extractEnvVariable(voice))
       .filter((voice) => voice && !voice.includes('${') && voice.toUpperCase() !== 'ALL');
-    let voice = requestVoice ? extractEnvVariable(requestVoice) : requestVoice;
+    let voice = requestVoice || '';
     if (!voice || !voices.includes(voice) || (voice.toUpperCase() === 'ALL' && voices.length > 1)) {
       voice = getRandomVoiceId(voices);
     }

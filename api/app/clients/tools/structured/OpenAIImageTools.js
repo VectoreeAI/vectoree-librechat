@@ -216,8 +216,9 @@ Error Message: ${error.message}`);
       // For gpt-image-1, the response contains base64-encoded images
       // TODO: handle cost in `resp.usage`
       const generated = resp.data[0];
+      const dataMime = vectoreeImage ? 'png' : output_format;
       const imageUrl = generated.b64_json
-        ? `data:image/${output_format};base64,${generated.b64_json}`
+        ? `data:image/${dataMime};base64,${generated.b64_json}`
         : generated.url;
 
       if (!imageUrl) {
