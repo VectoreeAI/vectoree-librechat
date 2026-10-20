@@ -129,6 +129,8 @@ router.post(
         email: body.email,
         password: body.password,
         otp: body.otp,
+        code: body.code,
+        redirectTo: body.action === 'send-reset' ? `${publicOrigin(req)}/reset-password` : undefined,
       });
       if (outcome.kind === 'response') {
         return res.status(outcome.status).json(outcome.body);

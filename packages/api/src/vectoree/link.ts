@@ -13,6 +13,16 @@ import { redactSecrets } from './text';
 
 const LINK_TIMEOUT_MS = 180_000;
 
+export function readVectoreeAppCredentials(
+  env: NodeJS.ProcessEnv,
+  projectRoot: string,
+): { apiUrl: string; apiKey: string } | null {
+  const root = resolveLinkDataRoot(env, projectRoot);
+  const signal = readLinkSignal(root, projectRoot, env);
+  if (!signal.apiKey) return null;
+  return { apiUrl: signal.apiUrl ?? DEFAULT_API_URL, apiKey: signal.apiKey };
+}
+
 export type VectoreeLinkStatus = {
   linked: boolean;
   projectName?: string;
