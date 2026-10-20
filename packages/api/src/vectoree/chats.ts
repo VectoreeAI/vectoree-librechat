@@ -1,9 +1,12 @@
 import type { VectoreeAppCredentials } from './appAuth';
+import type { VectoreeFetch } from './url';
 import { readErrorMessage } from './text';
 
 const CONVERSATIONS = 'librechat_conversations';
 const MESSAGES = 'librechat_messages';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MESSAGE_PAGE = 200;
+const MAX_MESSAGE_PAGES = 50;
 
 export type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 
@@ -59,7 +62,7 @@ const ensured = new Map<string, Promise<void>>();
 
 export function createVectoreeChats(options: {
   credentials: () => VectoreeAppCredentials | null;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: VectoreeFetch;
 }) {
   const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -105,6 +108,7 @@ export function createVectoreeChats(options: {
     await pending;
   }
 
+  // Rows stay plaintext with RLS off: anyone who can open this project in the Vectoree console can read every user's chats.
   async function createTables(): Promise<void> {
     const listed = await request('/api/database/tables');
     if (!listed.ok) throw new Error(readErrorMessage(listed.data, 'Could not list tables'));
@@ -124,6 +128,7 @@ export function createVectoreeChats(options: {
         column('user_id', 'string', false),
         column('parent_message_id', 'string', true),
         column('sender', 'string', true),
+        // Vectoree `string` is PostgreSQL TEXT, so a long reply is not truncated to varchar.
         column('text', 'string', true),
         column('payload', 'json', true),
       ]);
@@ -151,10 +156,18 @@ export function createVectoreeChats(options: {
       const limit = clampLimit(query.limit);
       const params = new URLSearchParams({
         user_id: `eq.${appUserId}`,
-        order: 'updated_at.desc',
+        order: 'updated_at.desc,id.desc',
         limit: String(limit),
       });
-      if (query.cursor) params.set('updated_at', `lt.${query.cursor}`);
+      const cursor = readConversationCursor(query.cursor);
+      if (cursor?.id) {
+        params.set(
+          'or',
+          `(updated_at.lt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.lt.${cursor.id}))`,
+        );
+      } else if (cursor) {
+        params.set('updated_at', `lt.${cursor.updatedAt}`);
+      }
       const search = sanitizeSearch(query.search);
       const path = search
         ? `/api/database/records/${CONVERSATIONS}?${params}&title=ilike.*${encodeURIComponent(search)}*`
@@ -163,7 +176,9 @@ export function createVectoreeChats(options: {
       if (!result.ok) throw new Error(readErrorMessage(result.data, 'Could not list chats'));
       const conversations = rows(result.data).flatMap((row) => conversationFromRow(row, localUserId));
       const nextCursor =
-        conversations.length === limit ? conversations[conversations.length - 1]?.updatedAt ?? null : null;
+        conversations.length === limit
+          ? conversationCursor(conversations[conversations.length - 1])
+          : null;
       return { conversations, nextCursor };
     },
 
@@ -240,15 +255,33 @@ export function createVectoreeChats(options: {
     ): Promise<StoredChatMessage[]> {
       if (!UUID.test(conversationId)) return [];
       await ensureTables();
-      const params = new URLSearchParams({
-        conversation_id: `eq.${conversationId}`,
-        user_id: `eq.${appUserId}`,
-        order: 'created_at.asc',
-        limit: '200',
-      });
-      const result = await request(`/api/database/records/${MESSAGES}?${params}`);
-      if (!result.ok) throw new Error(readErrorMessage(result.data, 'Could not load messages'));
-      return rows(result.data).flatMap((row) => messageFromRow(row, localUserId));
+      const collected: StoredChatMessage[] = [];
+      let after: { createdAt: string; id: string } | null = null;
+      for (let page = 0; page < MAX_MESSAGE_PAGES; page += 1) {
+        const params = new URLSearchParams({
+          conversation_id: `eq.${conversationId}`,
+          user_id: `eq.${appUserId}`,
+          order: 'created_at.asc,id.asc',
+          limit: String(MESSAGE_PAGE),
+        });
+        if (after) {
+          params.set(
+            'or',
+            `(created_at.gt.${after.createdAt},and(created_at.eq.${after.createdAt},id.gt.${after.id}))`,
+          );
+        }
+        const result = await request(`/api/database/records/${MESSAGES}?${params}`);
+        if (!result.ok) throw new Error(readErrorMessage(result.data, 'Could not load messages'));
+        const batch = rows(result.data).flatMap((row) => messageFromRow(row, localUserId));
+        collected.push(...batch);
+        if (batch.length < MESSAGE_PAGE) return collected;
+        const last = batch[batch.length - 1];
+        if (!last || (after && last.createdAt === after.createdAt && last.messageId === after.id)) {
+          throw new Error('Could not load messages');
+        }
+        after = { createdAt: last.createdAt, id: last.messageId };
+      }
+      throw new Error('This chat is too long to load from Vectoree.');
     },
 
     async saveMessage(appUserId: string, localUserId: string, input: MessageWrite): Promise<StoredChatMessage | null> {
@@ -414,6 +447,22 @@ function clip(value: string | undefined, max: number): string {
 function clampLimit(value: number | undefined): number {
   if (!value || value < 1) return 25;
   return Math.min(value, 100);
+}
+
+function conversationCursor(conversation: StoredConversation | undefined): string | null {
+  if (!conversation) return null;
+  return `${conversation.updatedAt}|${conversation.conversationId}`;
+}
+
+function readConversationCursor(cursor: string | null | undefined): { updatedAt: string; id?: string } | null {
+  if (!cursor) return null;
+  const splitAt = cursor.lastIndexOf('|');
+  if (splitAt > 0) {
+    const updatedAt = cursor.slice(0, splitAt);
+    const id = cursor.slice(splitAt + 1);
+    if (updatedAt && UUID.test(id)) return { updatedAt, id };
+  }
+  return { updatedAt: cursor };
 }
 
 function sanitizeSearch(value: string | undefined): string {

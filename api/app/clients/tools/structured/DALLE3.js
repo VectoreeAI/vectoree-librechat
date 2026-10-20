@@ -71,11 +71,12 @@ class DALLE3 extends Tool {
     let apiKey = fields.DALLE3_API_KEY ?? fields.DALLE_API_KEY ?? this.getApiKey();
     const config = { apiKey };
     const dedicatedDalle = Boolean(process.env.DALLE3_API_KEY || process.env.DALLE_API_KEY);
+    const reverseProxy = Boolean(process.env.DALLE_REVERSE_PROXY);
     this.imageModel = dedicatedDalle
       ? 'dall-e-3'
       : process.env.VECTOREE_IMAGE_MODEL || 'bytedance-seed/seedream-5-0-pro';
-    this.vectoreeImage = !dedicatedDalle && Boolean(process.env.VECTOREE_API_KEY);
-    if (process.env.DALLE_REVERSE_PROXY) {
+    this.vectoreeImage = !dedicatedDalle && !reverseProxy && Boolean(process.env.VECTOREE_API_KEY);
+    if (reverseProxy) {
       config.baseURL = extractBaseURL(process.env.DALLE_REVERSE_PROXY);
     } else if (this.vectoreeImage && process.env.VECTOREE_API_BASE) {
       config.baseURL = process.env.VECTOREE_API_BASE.replace(/\/$/, '');
@@ -128,8 +129,15 @@ class DALLE3 extends Tool {
   }
 
   getApiKey() {
-    const apiKey =
-      process.env.DALLE3_API_KEY ?? process.env.DALLE_API_KEY ?? process.env.VECTOREE_API_KEY ?? '';
+    const dedicated = process.env.DALLE3_API_KEY ?? process.env.DALLE_API_KEY ?? '';
+    if (dedicated) return dedicated;
+    if (process.env.DALLE_REVERSE_PROXY) {
+      if (!this.override) {
+        throw new Error('Missing DALLE_API_KEY environment variable.');
+      }
+      return '';
+    }
+    const apiKey = process.env.VECTOREE_API_KEY ?? '';
     if (!apiKey && !this.override) {
       throw new Error('Missing DALLE_API_KEY environment variable.');
     }

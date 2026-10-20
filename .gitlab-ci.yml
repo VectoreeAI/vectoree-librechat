@@ -87,6 +87,24 @@ test:
     - node --test config/gitlab-ci.contract.test.mjs
   timeout: 10m
 
+unit:
+  stage: check
+  image: node:24.16.0-bookworm-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_COMMIT_BRANCH == "main"
+  before_script:
+    - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates git python3 make g++ >/dev/null
+  script:
+    - npm ci
+    - npm run build:data-provider
+    - npm run build:data-schemas
+    - npm run build:api
+    - cd packages/api && npx jest --coverage=false --watchman=false --watchAll=false src/vectoree/chats.spec.ts src/vectoree/appAuth.spec.ts src/vectoree/defaults.spec.ts src/vectoree/link.spec.ts src/vectoree/envfile.spec.ts
+    - cd "$CI_PROJECT_DIR" && cd api && npx jest --coverage=false --watchman=false --watchAll=false app/clients/tools/structured/specs/DALLE3.spec.js server/services/Files/Audio/TTSService.spec.js
+  timeout: 40m
+
 .deploy:
   stage: deploy
   image: docker:27
@@ -94,6 +112,7 @@ test:
   interruptible: false
   needs:
     - test
+    - unit
   before_script:
     - unset DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_TLS_CERTDIR || true
     - apk add --no-cache bash openssh-client
@@ -166,15 +185,18 @@ test:
       echo "=== Pull images / deploy ==="
       export LIBRECHAT_IMAGE VECTOREE_API_URL="$DEPLOY_API_BASE_URL" DEPLOY_MODE=cloud
       sudo -E bash "$DEPLOY_PATH/deploy/deploy-remote.sh"
+      sudo docker logout "$CI_REGISTRY" || true
       echo "=== Done ==="
       REMOTE
+  after_script:
+    - docker logout "$CI_REGISTRY" || true
 
 deploy_development:
   extends: .deploy
   resource_group: librechat-development-deploy
   environment:
     name: dev
-    url: https://vectoree.net
+    url: https://vectoree.net/librechat/
   rules:
     - if: $CI_COMMIT_BRANCH == "dev"
   variables:
@@ -185,11 +207,12 @@ deploy_production:
   extends: .deploy
   needs:
     - test
+    - unit
     - backup_main
   resource_group: librechat-production-deploy
   environment:
     name: production
-    url: https://vectoree.ai
+    url: https://vectoree.ai/librechat/
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 

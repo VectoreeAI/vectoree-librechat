@@ -1,3 +1,4 @@
+import type { VectoreeFetch } from './url';
 import { readErrorMessage } from './text';
 
 const PATHS = {
@@ -93,7 +94,7 @@ const OTP_PATTERN = /^\d{8}$/;
 
 export function createVectoreeAppAuth(options: {
   credentials: () => VectoreeAppCredentials | null;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: VectoreeFetch;
 }) {
   const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -276,8 +277,12 @@ function actionBody(
   }
   if (action === 'send-verification') return { email: email ?? '' };
   if (action === 'send-reset') {
-    const redirectTo = readRedirect(input.redirectTo);
-    return redirectTo ? { email: email ?? '', redirectTo } : { email: email ?? '' };
+    if (typeof input.redirectTo === 'string' && input.redirectTo.trim()) {
+      const redirectTo = readRedirect(input.redirectTo);
+      if (!redirectTo) return { error: 'Reset link must use https' };
+      return { email: email ?? '', redirectTo };
+    }
+    return { email: email ?? '' };
   }
   if (action === 'exchange-reset') {
     const code = typeof input.code === 'string' ? input.code.trim() : '';
@@ -303,8 +308,7 @@ function actionBody(
 function readRedirect(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const redirectTo = value.trim();
-  if (!redirectTo.startsWith('https://') && !redirectTo.startsWith('http://')) return null;
-  if (redirectTo.length > 300) return null;
+  if (!redirectTo.startsWith('https://') || redirectTo.length > 300) return null;
   return redirectTo;
 }
 

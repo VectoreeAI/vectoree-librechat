@@ -33,7 +33,7 @@ describe('vectoree app auth', () => {
       body: { requireEmailVerification: true },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${API}/api/auth/users?client_type=server`);
     expect(init.headers).toMatchObject({ Authorization: `Bearer ${KEY}` });
     expect(JSON.parse(String(init.body))).toEqual({ email: 'a@example.com', password: 'secret1' });
@@ -94,7 +94,7 @@ describe('vectoree app auth', () => {
     });
     expect(JSON.stringify(outcome)).not.toContain('app-user-jwt');
     expect(JSON.stringify(outcome)).not.toContain(KEY);
-    expect(JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({
+    expect(JSON.parse(String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({
       email: 'a@example.com',
       otp: '12345678',
     });
@@ -151,13 +151,30 @@ describe('vectoree app auth', () => {
       otp: 'reset-token',
     });
     expect(reset).toEqual({ kind: 'response', status: 200, body: { ok: true } });
-    const bodies = fetchImpl.mock.calls.map((call) => JSON.parse(String((call as [string, RequestInit])[1].body)));
+    const bodies = fetchImpl.mock.calls.map((call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)));
     expect(bodies[0]).toEqual({
       email: 'a@example.com',
       redirectTo: 'https://chat.example/reset-password',
     });
     expect(bodies[1]).toEqual({ email: 'a@example.com', code: '123456' });
     expect(bodies[2]).toEqual({ newPassword: 'new-secret', otp: 'reset-token' });
+  });
+
+  test('rejects an http reset link before calling Vectoree', async () => {
+    const fetchImpl = jest.fn();
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    expect(
+      await auth.submit({
+        action: 'send-reset',
+        email: 'a@example.com',
+        redirectTo: 'http://evil.example/reset-password',
+      }),
+    ).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Reset link must use https' },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

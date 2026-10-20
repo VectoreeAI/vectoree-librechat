@@ -1,6 +1,7 @@
 export { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
 export { VectoreeConfigError } from './errors';
 export { createVectoreeLink, readVectoreeAppCredentials } from './link';
+export { configuredPublicOrigin } from './url';
 export { createVectoreeChatBridge } from './chatBridge';
 export { createVectoreeChats } from './chats';
 export {

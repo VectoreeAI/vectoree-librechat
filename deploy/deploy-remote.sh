@@ -81,6 +81,30 @@ if [[ "$(id -u)" -eq 0 ]]; then
 fi
 chmod 600 .env
 
+env_owned_by_container_user() {
+  local owner mode digits owner_bits
+  if stat -c '%u' .env >/dev/null 2>&1; then
+    owner="$(stat -c '%u' .env)"
+    mode="$(stat -c '%a' .env)"
+  else
+    owner="$(stat -f '%u' .env)"
+    mode="$(stat -f '%OLp' .env)"
+  fi
+  digits="${mode: -3}"
+  owner_bits="${digits:0:1}"
+  [[ "$owner" == "1000" && "$owner_bits" =~ ^[4567]$ ]]
+}
+
+if [[ "$(id -u)" -eq 0 ]] && command -v python3 >/dev/null 2>&1; then
+  if ! python3 -c 'import os; os.setgid(1000); os.setuid(1000); open(".env", "rb").read(1)'; then
+    echo "[remote] ERROR: uid 1000 cannot read .env. The container runs as that user."
+    exit 1
+  fi
+elif ! env_owned_by_container_user; then
+  echo "[remote] ERROR: .env must be readable by uid 1000. Deploy as root so it can be chowned, or run this script as uid 1000."
+  exit 1
+fi
+
 if [[ -z "$(read_dotenv LIBRECHAT_IMAGE)" ]]; then
   echo "Set LIBRECHAT_IMAGE in .env"
   exit 1

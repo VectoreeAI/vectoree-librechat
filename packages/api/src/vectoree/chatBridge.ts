@@ -1,6 +1,10 @@
 import type { JsonValue, StoredChatMessage, StoredConversation } from './chats';
 import type { VectoreeAppCredentials } from './appAuth';
+import type { VectoreeFetch } from './url';
 import { createVectoreeChats, isChatUuid } from './chats';
+
+const OWNER_CACHE_TTL_MS = 60_000;
+const OWNER_CACHE_LIMIT = 200;
 
 type MongoConversation = {
   subagentThread?: unknown;
@@ -113,19 +117,28 @@ export function createVectoreeChatBridge(options: {
   methods: VectoreeChatMongo;
   credentials: () => VectoreeAppCredentials | null;
   findOwner: (userId: string) => Promise<string | null>;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: VectoreeFetch;
 }): VectoreeChatBridge {
   const store = createVectoreeChats({
     credentials: options.credentials,
     fetchImpl: options.fetchImpl,
   });
-  const owners = new Map<string, string | null>();
+  const owners = new Map<string, { id: string | null; expires: number }>();
 
   async function ownerId(userId: string): Promise<string | null> {
-    if (!options.credentials()?.apiKey) return null;
-    if (owners.has(userId)) return owners.get(userId) ?? null;
+    const apiKey = options.credentials()?.apiKey ?? '';
+    if (!apiKey) return null;
+    const cacheKey = `${apiKey}:${userId}`;
+    const cached = owners.get(cacheKey);
+    const now = Date.now();
+    if (cached && cached.expires > now) return cached.id;
     const appUserId = await options.findOwner(userId);
-    owners.set(userId, appUserId);
+    owners.delete(cacheKey);
+    if (owners.size >= OWNER_CACHE_LIMIT) {
+      const oldest = owners.keys().next().value;
+      if (oldest) owners.delete(oldest);
+    }
+    owners.set(cacheKey, { id: appUserId, expires: now + OWNER_CACHE_TTL_MS });
     return appUserId;
   }
 
@@ -143,15 +156,36 @@ export function createVectoreeChatBridge(options: {
       if (!appUserId || query?.isArchived || query?.pinned || query?.tags?.length || query?.projectId) {
         return options.methods.getConvosByCursor(user, query);
       }
-      const page = await store.listConversations(appUserId, user, {
-        limit: query?.limit,
-        cursor: query?.cursor,
-        search: query?.search,
-      });
-      return {
-        conversations: page.conversations.map(presentConversation),
-        nextCursor: page.nextCursor,
+      const decoded = decodeListCursor(query?.cursor);
+      const limit = query?.limit;
+      let vectoreeFailed = false;
+      let vectoreePage: { conversations: StoredConversation[]; nextCursor: string | null } = {
+        conversations: [],
+        nextCursor: null,
       };
+      try {
+        vectoreePage = await store.listConversations(appUserId, user, {
+          limit,
+          cursor: decoded.v,
+          search: query?.search,
+        });
+      } catch {
+        vectoreeFailed = true;
+      }
+      const mongoPage = await options.methods.getConvosByCursor(user, { ...query, cursor: decoded.m });
+      if (vectoreeFailed) {
+        if (mongoPage.conversations.length === 0 && !mongoPage.nextCursor) {
+          throw new Error('Could not load chats from Vectoree. Try again.');
+        }
+        return {
+          conversations: mongoPage.conversations,
+          nextCursor: encodeListCursor({
+            v: decoded.v,
+            m: mongoPage.nextCursor,
+          }),
+        };
+      }
+      return mergeConversationPages(vectoreePage, mongoPage, decoded, clampPage(limit));
     },
 
     async getConvo(user: string, conversationId: string): Promise<unknown> {
@@ -159,8 +193,14 @@ export function createVectoreeChatBridge(options: {
       if (!appUserId || !isChatUuid(conversationId)) {
         return options.methods.getConvo(user, conversationId);
       }
-      const stored = await store.getConversation(appUserId, user, conversationId);
-      if (stored) return presentConversation(stored);
+      try {
+        const stored = await store.getConversation(appUserId, user, conversationId);
+        if (stored) return presentConversation(stored);
+      } catch (error) {
+        const legacy = await options.methods.getConvo(user, conversationId);
+        if (legacy) return legacy;
+        throw error;
+      }
       return options.methods.getConvo(user, conversationId);
     },
 
@@ -169,8 +209,14 @@ export function createVectoreeChatBridge(options: {
       if (!appUserId || !isChatUuid(conversationId)) {
         return options.methods.getConvoTitle(user, conversationId);
       }
-      const stored = await store.getConversation(appUserId, user, conversationId);
-      if (stored) return stored.title;
+      try {
+        const stored = await store.getConversation(appUserId, user, conversationId);
+        if (stored) return stored.title;
+      } catch (error) {
+        const legacy = await options.methods.getConvoTitle(user, conversationId);
+        if (legacy) return legacy;
+        throw error;
+      }
       return options.methods.getConvoTitle(user, conversationId);
     },
 
@@ -221,11 +267,18 @@ export function createVectoreeChatBridge(options: {
       if (!appUserId || !isChatUuid(conversationId)) {
         return options.methods.getMessages(filter, select);
       }
-      const stored = await store.listMessages(appUserId, user, conversationId);
-      if (stored.length === 0) return options.methods.getMessages(filter, select);
-      const messageId = typeof filter.messageId === 'string' ? filter.messageId : '';
-      const matched = messageId ? stored.filter((item) => item.messageId === messageId) : stored;
-      return matched.map(presentMessage);
+      try {
+        const stored = await store.listMessages(appUserId, user, conversationId);
+        if (stored.length === 0) return options.methods.getMessages(filter, select);
+        const messageId = typeof filter.messageId === 'string' ? filter.messageId : '';
+        const matched = messageId ? stored.filter((item) => item.messageId === messageId) : stored;
+        return matched.map(presentMessage);
+      } catch (error) {
+        const legacy = await options.methods.getMessages(filter, select);
+        if (legacy.length > 0) return legacy;
+        const message = error instanceof Error ? error.message : 'Could not load messages';
+        throw new Error(message);
+      }
     },
 
     async saveMessage(ctx: SaveContext, params: MessageData, metadata?: unknown): Promise<unknown> {
@@ -321,4 +374,170 @@ function conversationIds(value: unknown): string[] | null {
     return value.$in.filter((item): item is string => typeof item === 'string');
   }
   return null;
+}
+
+type ListCursor = { v: string | null; m: string | null };
+
+type MergeRow = {
+  source: 'v' | 'm';
+  item: unknown;
+  updatedAt: string;
+  id: string;
+};
+
+function clampPage(limit: number | undefined): number {
+  if (!limit || limit < 1) return 25;
+  return Math.min(Math.trunc(limit), 100);
+}
+
+function decodeListCursor(cursor: string | null | undefined): ListCursor {
+  if (!cursor) return { v: null, m: null };
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8')) as {
+      v?: unknown;
+      m?: unknown;
+      primary?: unknown;
+    };
+    if (parsed && typeof parsed === 'object' && !('primary' in parsed) && ('v' in parsed || 'm' in parsed)) {
+      return {
+        v: typeof parsed.v === 'string' ? parsed.v : null,
+        m: typeof parsed.m === 'string' ? parsed.m : null,
+      };
+    }
+  } catch {
+    // Not a composite cursor.
+  }
+  if (cursor.includes('|') || /^\d{4}-\d{2}-\d{2}T/.test(cursor)) return { v: cursor, m: null };
+  return { v: null, m: cursor };
+}
+
+function encodeListCursor(cursor: ListCursor): string | null {
+  if (!cursor.v && !cursor.m) return null;
+  return Buffer.from(JSON.stringify(cursor)).toString('base64');
+}
+
+function mergeConversationPages(
+  vectoreePage: { conversations: StoredConversation[]; nextCursor: string | null },
+  mongoPage: { conversations: unknown[]; nextCursor: string | null },
+  incoming: ListCursor,
+  limit: number,
+): { conversations: unknown[]; nextCursor: string | null } {
+  const seen = new Set<string>();
+  const rows: MergeRow[] = [];
+  for (const item of vectoreePage.conversations) {
+    seen.add(item.conversationId);
+    rows.push({
+      source: 'v',
+      item: presentConversation(item),
+      updatedAt: item.updatedAt,
+      id: item.conversationId,
+    });
+  }
+  let duplicateMongo = 0;
+  for (const item of mongoPage.conversations) {
+    const id = conversationIdOf(item);
+    if (id && seen.has(id)) {
+      duplicateMongo += 1;
+      continue;
+    }
+    rows.push({
+      source: 'm',
+      item,
+      updatedAt: stampOf(recordField(item, 'updatedAt')),
+      id,
+    });
+  }
+  rows.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  const page = rows.slice(0, limit);
+  const rest = rows.slice(limit);
+  const mongoFetched = mongoPage.conversations.length;
+  const mongoKept = rows.filter((row) => row.source === 'm').length;
+  return {
+    conversations: page.map((row) => row.item),
+    nextCursor: encodeListCursor({
+      v: nextSourceCursor(
+        page.filter((row) => row.source === 'v'),
+        rest.some((row) => row.source === 'v'),
+        rest.length > 0,
+        vectoreePage.nextCursor,
+        incoming.v,
+        (row) => `${row.updatedAt}|${row.id}`,
+      ),
+      m: nextMongoCursor(
+        page,
+        rest,
+        rest.length > 0,
+        mongoPage.nextCursor,
+        incoming.m,
+        mongoFetched,
+        mongoKept,
+        duplicateMongo,
+      ),
+    }),
+  };
+}
+
+function nextSourceCursor(
+  included: MergeRow[],
+  hasLeftover: boolean,
+  moreRemains: boolean,
+  sourceNext: string | null,
+  incoming: string | null,
+  cursorOf: (row: MergeRow) => string,
+): string | null {
+  if (hasLeftover) {
+    const last = included[included.length - 1];
+    return last ? cursorOf(last) : incoming;
+  }
+  if (included.length === 0) return incoming;
+  if (sourceNext) return sourceNext;
+  if (!moreRemains) return null;
+  return cursorOf(included[included.length - 1]);
+}
+
+function nextMongoCursor(
+  page: MergeRow[],
+  rest: MergeRow[],
+  moreRemains: boolean,
+  sourceNext: string | null,
+  incoming: string | null,
+  fetched: number,
+  kept: number,
+  duplicates: number,
+): string | null {
+  if (fetched > 0 && kept === 0 && duplicates === fetched) return sourceNext;
+  const included = page.filter((row) => row.source === 'm');
+  const hasLeftover = rest.some((row) => row.source === 'm');
+  if (hasLeftover) {
+    const last = included[included.length - 1];
+    return last ? mongoCursorAfter(last.item) ?? incoming : incoming;
+  }
+  if (included.length === 0) return incoming;
+  if (sourceNext) return sourceNext;
+  if (!moreRemains) return null;
+  const last = included[included.length - 1];
+  return last ? mongoCursorAfter(last.item) : null;
+}
+
+function mongoCursorAfter(item: unknown): string | null {
+  const updatedAt = stampOf(recordField(item, 'updatedAt'));
+  const id = recordField(item, '_id');
+  const mongoId = id == null ? '' : String(id);
+  if (!updatedAt || !mongoId) return null;
+  return Buffer.from(JSON.stringify({ primary: updatedAt, secondary: updatedAt, id: mongoId })).toString('base64');
+}
+
+function conversationIdOf(item: unknown): string {
+  const id = recordField(item, 'conversationId');
+  return typeof id === 'string' ? id : '';
+}
+
+function recordField(item: unknown, key: string): unknown {
+  if (!item || typeof item !== 'object') return undefined;
+  return (item as { [key: string]: unknown })[key];
+}
+
+function stampOf(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === 'string' ? value : '';
 }

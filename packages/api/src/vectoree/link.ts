@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { VectoreeFetch } from './url';
 import {
   assertLinkRootWritable,
   hydrateProcessEnv,
@@ -6,7 +7,7 @@ import {
   readLinkSignal,
   resolveLinkDataRoot,
 } from './store';
-import { DEFAULT_API_URL, extractProjectId, normalizeApiUrl } from './url';
+import { DEFAULT_API_URL, configuredPublicOrigin, extractProjectId, normalizeApiUrl } from './url';
 import { VectoreeConfigError } from './errors';
 import { exchangeAndMint } from './oauth';
 import { redactSecrets } from './text';
@@ -41,7 +42,7 @@ export type VectoreeLinkOptions = {
   env: NodeJS.ProcessEnv;
   projectRoot: string;
   linkDataRoot?: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: VectoreeFetch;
   now?: () => number;
   timeoutMs?: number;
   onLinked?: () => Promise<void> | void;
@@ -168,6 +169,7 @@ export function createVectoreeLink(options: VectoreeLinkOptions) {
           },
           options.env,
         );
+        await rememberResetOrigin(fetchImpl, options.env, current.apiUrl, minted.apiKey, options.logger);
         await notifyLinked(options);
         session = {
           status: 'linked',
@@ -217,6 +219,60 @@ function publicSnapshot(state: SessionState): VectoreeConnectSnapshot {
     ...(state.apiUrl ? { apiUrl: state.apiUrl } : {}),
     ...(state.projectName ? { projectName: state.projectName } : {}),
   };
+}
+
+async function rememberResetOrigin(
+  fetchImpl: VectoreeFetch,
+  env: NodeJS.ProcessEnv,
+  apiUrl: string,
+  apiKey: string,
+  logger: VectoreeLinkOptions['logger'],
+): Promise<void> {
+  const origin = configuredPublicOrigin(env);
+  if (!origin) return;
+  const pattern = `${origin}/reset-password**`;
+  try {
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+    const listed = await fetchImpl(`${apiUrl}/api/auth/config`, { headers });
+    if (!listed.ok) {
+      logger?.error('[vectoree-link] could not read the reset-link allowlist');
+      return;
+    }
+    const current = await readAllowlist(listed);
+    if (!current) {
+      logger?.error('[vectoree-link] could not read the reset-link allowlist');
+      return;
+    }
+    if (current.includes(pattern)) return;
+    const saved = await fetchImpl(`${apiUrl}/api/auth/config`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ allowedRedirectUrls: [...current, pattern] }),
+    });
+    if (!saved.ok) {
+      logger?.error('[vectoree-link] could not store the reset-link allowlist');
+    }
+  } catch (error) {
+    const message = redactSecrets(error instanceof Error ? error.message : 'allowlist failed');
+    logger?.error(`[vectoree-link] could not store the reset-link allowlist: ${message}`);
+  }
+}
+
+async function readAllowlist(response: Response): Promise<string[] | null> {
+  const text = await response.text();
+  if (!text) return [];
+  try {
+    const data = JSON.parse(text) as { allowedRedirectUrls?: unknown };
+    if (data.allowedRedirectUrls == null) return [];
+    if (!Array.isArray(data.allowedRedirectUrls)) return null;
+    return data.allowedRedirectUrls.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return null;
+  }
 }
 
 async function notifyLinked(options: VectoreeLinkOptions): Promise<void> {

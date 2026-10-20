@@ -106,6 +106,16 @@ describe('DALLE3', () => {
     });
   });
 
+  it('does not send the Vectoree key to a DALL-E reverse proxy', () => {
+    delete process.env.DALLE3_API_KEY;
+    delete process.env.DALLE_API_KEY;
+    process.env.VECTOREE_API_KEY = 'sk-ve-test';
+    process.env.DALLE_REVERSE_PROXY = 'https://proxy.example/v1';
+    OpenAI.mockClear();
+    expect(() => new DALLE3()).toThrow('Missing DALLE_API_KEY environment variable.');
+    expect(OpenAI).not.toHaveBeenCalled();
+  });
+
   it('should replace unwanted characters in input string', () => {
     const input = 'This is a test\nstring with "quotes" and new lines.';
     const expectedOutput = 'This is a test string with quotes and new lines.';
