@@ -1,9 +1,12 @@
 const express = require('express');
 const { logger } = require('@librechat/data-schemas');
 const {
+  bindPreviewOwner,
   configuredPublicOrigin,
+  confirmCloudPreview,
   createVectoreeAppAuth,
   createVectoreeLink,
+  declineCloudPreview,
   getBalanceConfig,
   isEmailDomainAllowed,
   linkVectoreeUser,
@@ -37,6 +40,7 @@ const link = createVectoreeLink({
 
 const appAuth = createVectoreeAppAuth({
   credentials: () => link.appCredentials(),
+  env: process.env,
 });
 
 const router = express.Router();
@@ -85,7 +89,23 @@ router.get('/link-status', (req, res) => {
   }
 });
 
-router.post('/preview/redeem', async (req, res) => {
+function clearAuthCookies(res) {
+  res.clearCookie('refreshToken');
+  res.clearCookie('openid_access_token');
+  res.clearCookie('openid_id_token');
+  res.clearCookie('openid_user_id');
+  res.clearCookie('token_provider');
+}
+
+function applyPreviewResult(res, result) {
+  if (result.cookie) {
+    clearAuthCookies(res);
+    res.cookie(result.cookie.name, result.cookie.value, result.cookie.options);
+  }
+  return res.status(result.status).json(result.body);
+}
+
+router.post('/preview/redeem', middleware.requireSameOrigin, middleware.previewLimiter, async (req, res) => {
   try {
     const result = await redeemCloudPreview({
       env: process.env,
@@ -93,9 +113,32 @@ router.post('/preview/redeem', async (req, res) => {
       cookieHeader: req.headers.cookie,
       secure: secureRequest(req),
     });
-    if (result.cookie) {
-      res.cookie(result.cookie.name, result.cookie.value, result.cookie.options);
-    }
+    return applyPreviewResult(res, result);
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.post('/preview/confirm', middleware.requireSameOrigin, middleware.previewLimiter, (req, res) => {
+  try {
+    const result = confirmCloudPreview({
+      env: process.env,
+      switchToken: req.body && typeof req.body === 'object' ? req.body.switchToken : undefined,
+      cookieHeader: req.headers.cookie,
+      secure: secureRequest(req),
+    });
+    return applyPreviewResult(res, result);
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.post('/preview/decline', middleware.requireSameOrigin, middleware.previewLimiter, (req, res) => {
+  try {
+    const result = declineCloudPreview(
+      process.env,
+      req.body && typeof req.body === 'object' ? req.body.switchToken : undefined,
+    );
     return res.status(result.status).json(result.body);
   } catch (error) {
     return sendError(res, error);
@@ -204,6 +247,11 @@ router.post(
       });
       if (!linked.ok) {
         return res.status(linked.status).json({ message: linked.message });
+      }
+      if (!usesProjectLink(process.env) && !bindPreviewOwner(req.headers.cookie, outcome.user.id)) {
+        return res.status(401).json({
+          message: 'This preview has expired. Open it again from Vectoree.',
+        });
       }
       if (linked.user.twoFactorEnabled) {
         return res.status(200).json({

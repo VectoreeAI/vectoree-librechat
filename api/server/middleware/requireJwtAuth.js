@@ -3,6 +3,7 @@ const passport = require('passport');
 const { logger } = require('@librechat/data-schemas');
 const {
   isEnabled,
+  assertCloudPreview,
   tenantContextMiddleware,
   getAuthFailureReasonCategory,
   buildSafeAuthLogContext,
@@ -185,6 +186,15 @@ const requireJwtAuth = (req, res, next) => {
       req.user = user;
       req.authStrategy = strategy;
       logFallbackSuccess(strategy);
+      if (typeof assertCloudPreview === 'function') {
+        const denial = assertCloudPreview(process.env, req.headers.cookie, {
+          openidId: user?.openidId,
+          provider: user?.provider,
+        });
+        if (denial) {
+          return res.status(denial.status).json({ message: denial.message });
+        }
+      }
       tenantContextMiddleware(req, res, (tenantErr) => {
         if (tenantErr) {
           return next(tenantErr);

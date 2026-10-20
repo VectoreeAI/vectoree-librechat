@@ -47,6 +47,7 @@ jest.mock('~/server/middleware', () => {
   return {
     requireSameOrigin: pass,
     loginLimiter: pass,
+    previewLimiter: pass,
     checkBan: pass,
     requireJwtAuth: (req, res, next) => {
       const role = req.get('x-test-role');

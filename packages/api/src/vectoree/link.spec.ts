@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { extractProjectId, normalizeApiUrl } from './url';
+import { hydrateProcessEnv } from './store';
 import { createVectoreeLink } from './link';
 import { upsertEnv } from './envfile';
 
@@ -20,6 +21,18 @@ function response(body: unknown, ok = true, status = 200): Response {
 }
 
 describe('vectoree link', () => {
+  test('does not copy a saved key into the environment in cloud mode', () => {
+    const root = tempRoot();
+    fs.mkdirSync(path.join(root, '.vectoree'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '.vectoree', 'config.json'),
+      JSON.stringify({ apiKey: 'sk-ve-v1-disk', apiUrl: 'https://vectoree.net', projectId: PROJECT_ID }),
+    );
+    const env: NodeJS.ProcessEnv = { DEPLOY_MODE: 'cloud' };
+    hydrateProcessEnv(root, root, env);
+    expect(env.VECTOREE_API_KEY).toBeUndefined();
+  });
+
   test('extracts a project UUID from a console URL', () => {
     expect(extractProjectId(PROJECT_ID)).toBe(PROJECT_ID);
     expect(extractProjectId(`https://vectoree.ai/dashboard/projects/${PROJECT_ID}`)).toBe(PROJECT_ID);

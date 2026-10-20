@@ -1,5 +1,6 @@
 import type { VectoreeFetch } from './url';
 import { readErrorMessage } from './text';
+import { readDeployMode } from './mode';
 
 const PATHS = {
   register: '/api/auth/users',
@@ -16,7 +17,15 @@ type AppAuthAction = keyof typeof PATHS;
 export type VectoreeAppCredentials = {
   apiUrl: string;
   apiKey: string;
+  projectId?: string;
 };
+
+export function previewIssuer(env: NodeJS.ProcessEnv, credentials: VectoreeAppCredentials): string {
+  if (readDeployMode(env) === 'cloud' && credentials.projectId) {
+    return `${credentials.apiUrl}/projects/${credentials.projectId}`;
+  }
+  return credentials.apiUrl;
+}
 
 export type VectoreeAuthUser = {
   id: string;
@@ -95,6 +104,7 @@ const OTP_PATTERN = /^\d{8}$/;
 export function createVectoreeAppAuth(options: {
   credentials: () => VectoreeAppCredentials | null;
   fetchImpl?: VectoreeFetch;
+  env?: NodeJS.ProcessEnv;
 }) {
   const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -134,7 +144,11 @@ export function createVectoreeAppAuth(options: {
       const payload = await readPayload(upstream);
       const sessionUser = upstream.ok ? readSessionUser(payload) : null;
       if (sessionUser) {
-        return { kind: 'session', user: sessionUser, issuer: credentials.apiUrl };
+        return {
+          kind: 'session',
+          user: sessionUser,
+          issuer: previewIssuer(options.env ?? process.env, credentials),
+        };
       }
       if (needsVerification(action, upstream.status, payload)) {
         return response(upstream.status === 403 ? 403 : 200, { requireEmailVerification: true });

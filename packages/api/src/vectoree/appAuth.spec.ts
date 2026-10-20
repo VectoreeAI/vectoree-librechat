@@ -1,5 +1,5 @@
 import type { VectoreeLinkedUser } from './appAuth';
-import { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
+import { createVectoreeAppAuth, linkVectoreeUser, previewIssuer, toVectoreeLinkedUser } from './appAuth';
 
 const API = 'https://vectoree.ai';
 const KEY = 'sk-ve-v1-test-key';
@@ -17,6 +17,15 @@ function credentials() {
 }
 
 describe('vectoree app auth', () => {
+  test('cloud identities include the project so user ids cannot collide', () => {
+    const projectId = '11111111-2222-4333-8444-555555555555';
+    expect(previewIssuer({ DEPLOY_MODE: 'cloud' }, { apiUrl: API, apiKey: KEY, projectId })).toBe(
+      `${API}/projects/${projectId}`,
+    );
+    expect(previewIssuer({ DEPLOY_MODE: 'local' }, { apiUrl: API, apiKey: KEY, projectId })).toBe(API);
+    expect(previewIssuer({}, { apiUrl: API, apiKey: KEY })).toBe(API);
+  });
+
   test('register that still needs a code does not send a second email', async () => {
     const fetchImpl = jest.fn(async () =>
       jsonResponse({ requireEmailVerification: true, user: { id: 'u1', email: 'a@example.com' } }),

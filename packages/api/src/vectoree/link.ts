@@ -21,10 +21,12 @@ export function readVectoreeAppCredentials(
   env: NodeJS.ProcessEnv,
   projectRoot: string,
   linkDataRoot?: string,
-): { apiUrl: string; apiKey: string } | null {
+): { apiUrl: string; apiKey: string; projectId?: string } | null {
   if (readDeployMode(env) === 'cloud') {
     const preview = currentPreviewCredentials();
-    return preview ? { apiUrl: preview.apiUrl, apiKey: preview.apiKey } : null;
+    return preview
+      ? { apiUrl: preview.apiUrl, apiKey: preview.apiKey, projectId: preview.projectId }
+      : null;
   }
   const root = linkDataRoot ?? resolveLinkDataRoot(env, projectRoot);
   const signal = readLinkSignal(root, projectRoot, env);
@@ -100,7 +102,7 @@ export function createVectoreeLink(options: VectoreeLinkOptions) {
     linkStatus(): VectoreeLinkStatus {
       return publicStatus(readLinkSignal(root, options.projectRoot, options.env));
     },
-    appCredentials(): { apiUrl: string; apiKey: string } | null {
+    appCredentials(): { apiUrl: string; apiKey: string; projectId?: string } | null {
       return readVectoreeAppCredentials(options.env, options.projectRoot, root);
     },
     poll(): VectoreeConnectSnapshot {

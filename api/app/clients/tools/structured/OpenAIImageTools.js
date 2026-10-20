@@ -10,10 +10,19 @@ const {
   oaiToolkit,
   extractBaseURL,
   getProxyDispatcher,
+  currentVectoreeApiKey,
   applyAxiosProxyConfig,
 } = require('@librechat/api');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getFiles } = require('~/models');
+
+function vectoreeApiKey() {
+  if (typeof currentVectoreeApiKey === 'function') {
+    const preview = currentVectoreeApiKey();
+    if (preview !== undefined) return preview;
+  }
+  return process.env.VECTOREE_API_KEY ?? '';
+}
 
 const displayMessage =
   "The tool displayed an image. All generated images are already plainly visible, so don't repeat the descriptions in detail. Do not list download links as they are available in the UI already. The user may download the images by clicking on them, but do not mention anything about downloading to the user.";
@@ -73,7 +82,7 @@ function createOpenAIImageTools(fields = {}) {
 
   const dedicatedImage = Boolean(process.env.IMAGE_GEN_OAI_API_KEY);
   const getApiKey = () => {
-    const apiKey = process.env.IMAGE_GEN_OAI_API_KEY || process.env.VECTOREE_API_KEY || '';
+    const apiKey = process.env.IMAGE_GEN_OAI_API_KEY || vectoreeApiKey() || '';
     if (!apiKey && !override) {
       throw new Error('Missing IMAGE_GEN_OAI_API_KEY environment variable.');
     }
@@ -169,7 +178,7 @@ function createOpenAIImageTools(fields = {}) {
           derivedSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
-        const vectoreeImage = !process.env.IMAGE_GEN_OAI_API_KEY && process.env.VECTOREE_API_KEY;
+        const vectoreeImage = !process.env.IMAGE_GEN_OAI_API_KEY && vectoreeApiKey();
         const count = Math.min(Math.max(1, n), 10);
         resp = await openai.images.generate(
           vectoreeImage

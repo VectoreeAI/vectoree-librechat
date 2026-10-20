@@ -907,7 +907,7 @@ endpoints:
 
   custom:
     # Vectoree: OpenAI-compatible chat at ${VECTOREE_API_BASE} (origin + /api/v1).
-    # /link writes VECTOREE_API_KEY, VECTOREE_API_URL, and VECTOREE_API_BASE.
+    # Local /link writes VECTOREE_API_KEY. Cloud mode fills that placeholder from the browser preview.
     # Only vectoree/auto is seeded. Custom endpoints stay selectable when ENDPOINTS is set.
     - name: 'Vectoree'
       apiKey: '${VECTOREE_API_KEY}'

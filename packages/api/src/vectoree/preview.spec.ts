@@ -1,7 +1,13 @@
 import type { VectoreeFetch } from './url';
 import {
+  assertCloudPreview,
+  bindPreviewOwner,
   bindRequestPreview,
   clearPreviews,
+  confirmCloudPreview,
+  currentVectoreeApiKey,
+  declineCloudPreview,
+  dropPreviewSession,
   previewActive,
   publicCookiePath,
   redeemCloudPreview,
@@ -11,6 +17,11 @@ import { readVectoreeAppCredentials } from './link';
 
 const TICKET = 't'.repeat(32);
 const PREVIEW_KEY = 'sk-ve-v1-preview-secret';
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -38,7 +49,7 @@ describe('cloud preview', () => {
     expect(publicCookiePath({ DOMAIN_CLIENT: 'https://vectoree.net/librechat/' })).toBe('/librechat');
   });
 
-  test('redeems a ticket once, hides the key, and replaces the previous preview', async () => {
+  test('redeems a ticket once, hides the key, and keeps the same project', async () => {
     const calls: string[] = [];
     const fetchImpl: VectoreeFetch = async (url) => {
       calls.push(url);
@@ -52,10 +63,11 @@ describe('cloud preview', () => {
     };
 
     const first = await redeemCloudPreview({ env, ticket: TICKET, secure: true, fetchImpl });
+    const cookie = `${first.cookie?.name}=${first.cookie?.value}`;
     const second = await redeemCloudPreview({
       env,
       ticket: TICKET,
-      cookieHeader: `${first.cookie?.name}=${first.cookie?.value}`,
+      cookieHeader: cookie,
       secure: true,
       fetchImpl,
     });
@@ -65,18 +77,107 @@ describe('cloud preview', () => {
       'https://vectoree.net/api/system/starter/preview/redeem',
     ]);
     expect(first.status).toBe(200);
-    expect(first.body).toEqual({ projectId: 'proj-a' });
+    expect(first.body).toEqual({ projectId: 'proj-a', projectName: 'proj-a' });
     expect(JSON.stringify(first.body)).not.toContain('sk-ve-');
     expect(first.cookie?.options).toMatchObject({ httpOnly: true, sameSite: 'lax', secure: true, path: '/librechat' });
-    expect(previewActive(`${first.cookie?.name}=${first.cookie?.value}`)).toBe(false);
-    expect(previewActive(`${second.cookie?.name}=${second.cookie?.value}`)).toBe(true);
+    expect(second.cookie).toBeUndefined();
+    expect(second.body.confirm).toBeUndefined();
+    expect(previewActive(cookie)).toBe(true);
 
-    let seen: { apiUrl: string; apiKey: string } | null = null;
-    bindRequestPreview(`${second.cookie?.name}=${second.cookie?.value}`, () => {
+    let seen: { apiUrl: string; apiKey: string; projectId?: string } | null = null;
+    bindRequestPreview(cookie, () => {
       seen = readVectoreeAppCredentials(env, '/tmp');
     });
-    expect(seen).toEqual({ apiUrl: 'https://vectoree.net', apiKey: PREVIEW_KEY });
+    expect(seen).toEqual({ apiUrl: 'https://vectoree.net', apiKey: PREVIEW_KEY, projectId: 'proj-a' });
     expect(readVectoreeAppCredentials(env, '/tmp')).toBeNull();
+  });
+
+  test('cloud model key is the visitor preview and never the shared environment key', async () => {
+    const savedMode = process.env.DEPLOY_MODE;
+    const savedKey = process.env.VECTOREE_API_KEY;
+    const savedUrl = process.env.VECTOREE_API_URL;
+    process.env.DEPLOY_MODE = 'cloud';
+    process.env.VECTOREE_API_KEY = 'sk-ve-shared';
+    process.env.VECTOREE_API_URL = 'https://vectoree.net';
+    try {
+      expect(currentVectoreeApiKey()).toBe('');
+      const redeemed = await redeemCloudPreview({
+        env: process.env,
+        ticket: TICKET,
+        secure: false,
+        fetchImpl: async () => jsonResponse({ apiKey: PREVIEW_KEY, projectId: 'proj-a' }),
+      });
+      const cookie = `${redeemed.cookie?.name}=${redeemed.cookie?.value}`;
+      let seen = '';
+      bindRequestPreview(cookie, () => {
+        seen = currentVectoreeApiKey() ?? '';
+      });
+      expect(seen).toBe(PREVIEW_KEY);
+      expect(currentVectoreeApiKey()).toBe('');
+    } finally {
+      restoreEnv('DEPLOY_MODE', savedMode);
+      restoreEnv('VECTOREE_API_KEY', savedKey);
+      restoreEnv('VECTOREE_API_URL', savedUrl);
+    }
+  });
+
+  test('asks before replacing a preview from a different project', async () => {
+    let projectId = 'proj-a';
+    const fetchImpl: VectoreeFetch = async () =>
+      jsonResponse({ apiKey: PREVIEW_KEY, projectId, organizationId: 'org-1' });
+    const env = { DEPLOY_MODE: 'cloud', VECTOREE_API_URL: 'https://vectoree.net', VECTOREE_API_KEY: 'sk-ve-server' };
+    const first = await redeemCloudPreview({ env, ticket: TICKET, secure: true, fetchImpl });
+    const cookie = `${first.cookie?.name}=${first.cookie?.value}`;
+    expect(bindPreviewOwner(cookie, 'user-a')).toBe(true);
+    projectId = 'proj-b';
+    const second = await redeemCloudPreview({
+      env,
+      ticket: TICKET,
+      cookieHeader: cookie,
+      secure: true,
+      fetchImpl,
+    });
+
+    expect(second.body).toMatchObject({ projectId: 'proj-b', confirm: true });
+    expect(second.cookie).toBeUndefined();
+    expect(JSON.stringify(second.body)).not.toContain('sk-ve-');
+    expect(previewActive(cookie)).toBe(true);
+    expect(previewActive(`ve_preview=${second.body.switchToken}`)).toBe(false);
+    expect(assertCloudPreview(env, cookie, { openidId: 'user-a', provider: 'vectoree' })).toBeNull();
+    expect(assertCloudPreview(env, cookie, { openidId: 'user-b', provider: 'vectoree' })?.message).toMatch(/Sign in again/);
+
+    const declined = declineCloudPreview(env, second.body.switchToken);
+    expect(declined.status).toBe(200);
+    expect(previewActive(cookie)).toBe(true);
+
+    projectId = 'proj-c';
+    const third = await redeemCloudPreview({
+      env,
+      ticket: TICKET,
+      cookieHeader: cookie,
+      secure: false,
+      fetchImpl,
+    });
+    const confirmed = confirmCloudPreview({
+      env,
+      switchToken: third.body.switchToken,
+      cookieHeader: cookie,
+      secure: true,
+    });
+    const nextCookie = `${confirmed.cookie?.name}=${confirmed.cookie?.value}`;
+    expect(confirmed.status).toBe(200);
+    expect(previewActive(cookie)).toBe(false);
+    expect(previewActive(nextCookie)).toBe(true);
+    expect(assertCloudPreview(env, nextCookie, { openidId: 'user-a', provider: 'vectoree' })?.message).toMatch(
+      /Sign in again/,
+    );
+    expect(bindPreviewOwner(nextCookie, 'user-c')).toBe(true);
+    expect(assertCloudPreview(env, nextCookie, { openidId: 'user-c', provider: 'vectoree' })).toBeNull();
+    dropPreviewSession(nextCookie);
+    expect(previewActive(nextCookie)).toBe(false);
+    expect(assertCloudPreview(env, nextCookie, { openidId: 'user-c', provider: 'vectoree' })?.message).toMatch(
+      /expired/,
+    );
   });
 
   test('does not call Vectoree for a local deploy or a malformed ticket', async () => {

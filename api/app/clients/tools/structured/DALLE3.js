@@ -9,9 +9,18 @@ const {
   extractBaseURL,
   getProxyDispatcher,
   getEnvProxyDispatcher,
+  currentVectoreeApiKey,
   createMinimalRetentionRequest,
 } = require('@librechat/api');
 const { FileContext, ContentTypes } = require('librechat-data-provider');
+
+function vectoreeApiKey() {
+  if (typeof currentVectoreeApiKey === 'function') {
+    const preview = currentVectoreeApiKey();
+    if (preview !== undefined) return preview;
+  }
+  return process.env.VECTOREE_API_KEY ?? '';
+}
 
 const dalle3JsonSchema = {
   type: 'object',
@@ -75,7 +84,7 @@ class DALLE3 extends Tool {
     this.imageModel = dedicatedDalle
       ? 'dall-e-3'
       : process.env.VECTOREE_IMAGE_MODEL || 'bytedance-seed/seedream-5-0-pro';
-    this.vectoreeImage = !dedicatedDalle && !reverseProxy && Boolean(process.env.VECTOREE_API_KEY);
+    this.vectoreeImage = !dedicatedDalle && !reverseProxy && Boolean(vectoreeApiKey());
     if (reverseProxy) {
       config.baseURL = extractBaseURL(process.env.DALLE_REVERSE_PROXY);
     } else if (this.vectoreeImage && process.env.VECTOREE_API_BASE) {
@@ -137,7 +146,7 @@ class DALLE3 extends Tool {
       }
       return '';
     }
-    const apiKey = process.env.VECTOREE_API_KEY ?? '';
+    const apiKey = vectoreeApiKey();
     if (!apiKey && !this.override) {
       throw new Error('Missing DALLE_API_KEY environment variable.');
     }

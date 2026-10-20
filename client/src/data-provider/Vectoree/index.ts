@@ -1,4 +1,6 @@
 export {
+  confirmPreviewSwitch,
+  declinePreviewSwitch,
   fetchVectoreeLinkPoll,
   fetchVectoreeLinkStatus,
   forgetPreviewTicket,

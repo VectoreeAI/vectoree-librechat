@@ -3,7 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { apiBaseFromOrigin, normalizeApiUrl } from './url';
 import { parseEnvFile, writeEnvFile } from './envfile';
+import { installCloudPreviewEnv } from './preview';
 import { VectoreeConfigError } from './errors';
+import { readDeployMode } from './mode';
 import { nonEmpty } from './text';
 
 export const APP_DATA_DIR = '/app/data';
@@ -153,12 +155,15 @@ export function prepareVectoreeStartup(options: {
   projectRoot: string;
   linkDataRoot?: string;
 }): void {
+  installCloudPreviewEnv();
   applyGenerationDefaults(options.env);
+  if (readDeployMode(options.env) === 'cloud') return;
   const root = options.linkDataRoot ?? resolveLinkDataRoot(options.env, options.projectRoot);
   hydrateProcessEnv(root, options.projectRoot, options.env);
 }
 
 export function hydrateProcessEnv(root: string, projectRoot: string, env: NodeJS.ProcessEnv): void {
+  if (readDeployMode(env) === 'cloud') return;
   clearUserProvidedOpenAI(projectRoot, env);
   const signal = readLinkSignal(root, projectRoot, env);
   if (!signal.linked || !signal.apiKey) return;
