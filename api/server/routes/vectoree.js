@@ -7,8 +7,12 @@ const {
   getBalanceConfig,
   isEmailDomainAllowed,
   linkVectoreeUser,
+  previewActive,
   preAuthTenantMiddleware,
+  publicDeploymentStatus,
+  redeemCloudPreview,
   toVectoreeLinkedUser,
+  usesProjectLink,
 } = require('@librechat/api');
 const { generate2FATempToken } = require('~/server/services/twoFactorService');
 const { getAppConfig, invalidateConfigCaches } = require('~/server/services/Config');
@@ -60,12 +64,41 @@ function sendError(res, error) {
   res.status(status).json({ status: 'error', message });
 }
 
-router.get('/link-status', (_req, res) => {
+function secureRequest(req) {
+  const forwarded = req.get('x-forwarded-proto');
+  const proto = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '';
+  return proto === 'https' || req.secure === true;
+}
+
+function rejectCloudLink(_req, res, next) {
+  if (usesProjectLink(process.env)) return next();
+  return res.status(404).json({ message: 'Link is not used when DEPLOY_MODE=cloud' });
+}
+
+router.get('/link-status', (req, res) => {
   try {
-    res.json(link.linkStatus());
+    const linked = usesProjectLink(process.env) ? link.linkStatus() : { linked: false };
+    res.json(publicDeploymentStatus(process.env, linked, previewActive(req.headers.cookie)));
   } catch {
     logger.error('[vectoree-link] status failed');
-    res.status(200).json({ linked: false });
+    res.status(200).json({ linked: false, deployMode: 'local', previewed: false });
+  }
+});
+
+router.post('/preview/redeem', async (req, res) => {
+  try {
+    const result = await redeemCloudPreview({
+      env: process.env,
+      ticket: req.body && typeof req.body === 'object' ? req.body.ticket : undefined,
+      cookieHeader: req.headers.cookie,
+      secure: secureRequest(req),
+    });
+    if (result.cookie) {
+      res.cookie(result.cookie.name, result.cookie.value, result.cookie.options);
+    }
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    return sendError(res, error);
   }
 });
 
@@ -83,7 +116,7 @@ function requireAdminToRelink(req, res, next) {
   return middleware.requireJwtAuth(req, res, () => middleware.checkAdmin(req, res, next));
 }
 
-router.post('/link/start', requireAdminToRelink, (req, res) => {
+router.post('/link/start', rejectCloudLink, requireAdminToRelink, (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     res.json(
@@ -98,7 +131,7 @@ router.post('/link/start', requireAdminToRelink, (req, res) => {
   }
 });
 
-router.get('/link', (_req, res) => {
+router.get('/link', rejectCloudLink, (_req, res) => {
   res.json(link.poll());
 });
 
@@ -188,7 +221,7 @@ router.post(
   },
 );
 
-router.get('/link/callback', async (req, res) => {
+router.get('/link/callback', rejectCloudLink, async (req, res) => {
   const code = typeof req.query.code === 'string' ? req.query.code : '';
   const state = typeof req.query.state === 'string' ? req.query.state : '';
   const html = await link.callback({ code, state });

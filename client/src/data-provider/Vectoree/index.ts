@@ -1,6 +1,9 @@
 export {
   fetchVectoreeLinkPoll,
   fetchVectoreeLinkStatus,
+  forgetPreviewTicket,
+  nextVectoreeGate,
+  redeemPreviewTicketOnce,
   startVectoreeLink,
   submitVectoreeAppAuth,
   useMarkVectoreeLinked,
