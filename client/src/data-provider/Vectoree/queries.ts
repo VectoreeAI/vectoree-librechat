@@ -109,16 +109,18 @@ export type VectoreeAppAuthResult = {
   status: number;
   requireEmailVerification: boolean;
   token?: string;
+  resetToken?: string;
   twoFAPending?: boolean;
   tempToken?: string;
   message?: string;
 };
 
 export async function submitVectoreeAppAuth(input: {
-  action: 'register' | 'login' | 'verify' | 'send-verification';
-  email: string;
+  action: 'register' | 'login' | 'verify' | 'send-verification' | 'send-reset' | 'exchange-reset' | 'reset-password';
+  email?: string;
   password?: string;
   otp?: string;
+  code?: string;
 }): Promise<VectoreeAppAuthResult> {
   const response = await fetch('/api/vectoree/app-auth', {
     method: 'POST',
@@ -133,6 +135,7 @@ export async function submitVectoreeAppAuth(input: {
     status: response.status,
     requireEmailVerification: record.requireEmailVerification === true,
     ...(typeof record.token === 'string' ? { token: record.token } : {}),
+    ...(typeof record.resetToken === 'string' ? { resetToken: record.resetToken } : {}),
     ...(record.twoFAPending === true ? { twoFAPending: true } : {}),
     ...(typeof record.tempToken === 'string' ? { tempToken: record.tempToken } : {}),
     ...(typeof record.message === 'string' ? { message: record.message } : {}),

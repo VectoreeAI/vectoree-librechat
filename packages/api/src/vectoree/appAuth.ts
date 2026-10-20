@@ -5,6 +5,9 @@ const PATHS = {
   login: '/api/auth/sessions',
   'send-verification': '/api/auth/email/send-verification',
   verify: '/api/auth/email/verify',
+  'send-reset': '/api/auth/email/send-reset-password',
+  'exchange-reset': '/api/auth/email/exchange-reset-password-token',
+  'reset-password': '/api/auth/email/reset-password',
 } as const;
 
 type AppAuthAction = keyof typeof PATHS;
@@ -25,6 +28,7 @@ export type AppAuthClientBody = {
   message?: string;
   requireEmailVerification?: boolean;
   ok?: boolean;
+  resetToken?: string;
 };
 
 export type AppAuthOutcome =
@@ -36,6 +40,8 @@ export type AppAuthSubmitInput = {
   email?: unknown;
   password?: unknown;
   otp?: unknown;
+  code?: unknown;
+  redirectTo?: unknown;
 };
 
 export type VectoreeLinkedUser = {
@@ -98,17 +104,16 @@ export function createVectoreeAppAuth(options: {
         return response(400, { message: 'invalid action' });
       }
       const email = readEmail(input.email);
-      if (!email) {
+      if (!email && action !== 'reset-password') {
         return response(400, { message: 'Enter a valid email address' });
+      }
+      const upstreamBody = actionBody(action, email, input);
+      if ('error' in upstreamBody) {
+        return response(400, { message: upstreamBody.error });
       }
       const credentials = options.credentials();
       if (!credentials?.apiKey || !credentials.apiUrl) {
         return response(400, { message: 'Vectoree is not connected' });
-      }
-
-      const upstreamBody = actionBody(action, email, input);
-      if ('error' in upstreamBody) {
-        return response(400, { message: upstreamBody.error });
       }
 
       let upstream: Response;
@@ -135,6 +140,16 @@ export function createVectoreeAppAuth(options: {
       }
       if (action === 'send-verification' && upstream.ok) {
         return response(upstream.status, { ok: true });
+      }
+      if ((action === 'send-reset' || action === 'reset-password') && upstream.ok) {
+        return response(upstream.status, { ok: true });
+      }
+      if (action === 'exchange-reset' && upstream.ok) {
+        const resetToken = readResetToken(payload);
+        if (!resetToken) {
+          return response(502, { message: 'Could not reset password' });
+        }
+        return response(upstream.status, { resetToken });
       }
       return response(upstream.status || 502, {
         message: readErrorMessage(payload, 'Could not sign in'),
@@ -228,7 +243,10 @@ function readAction(value: unknown): AppAuthAction | null {
     value === 'register' ||
     value === 'login' ||
     value === 'verify' ||
-    value === 'send-verification'
+    value === 'send-verification' ||
+    value === 'send-reset' ||
+    value === 'exchange-reset' ||
+    value === 'reset-password'
   ) {
     return value;
   }
@@ -242,22 +260,61 @@ function readEmail(value: unknown): string | null {
   return email;
 }
 
+const RESET_CODE_PATTERN = /^\d{6}$/;
+
 function actionBody(
   action: AppAuthAction,
-  email: string,
+  email: string | null,
   input: AppAuthSubmitInput,
-): { email: string; password?: string; otp?: string } | { error: string } {
+):
+  | { email?: string; password?: string; otp?: string; code?: string; redirectTo?: string; newPassword?: string }
+  | { error: string } {
   if (action === 'verify') {
     const otp = typeof input.otp === 'string' ? input.otp.trim() : '';
-    if (!OTP_PATTERN.test(otp)) return { error: 'Enter the 8-digit code' };
+    if (!OTP_PATTERN.test(otp) || !email) return { error: 'Enter the 8-digit code' };
     return { email, otp };
   }
-  if (action === 'send-verification') return { email };
+  if (action === 'send-verification') return { email: email ?? '' };
+  if (action === 'send-reset') {
+    const redirectTo = readRedirect(input.redirectTo);
+    return redirectTo ? { email: email ?? '', redirectTo } : { email: email ?? '' };
+  }
+  if (action === 'exchange-reset') {
+    const code = typeof input.code === 'string' ? input.code.trim() : '';
+    if (!RESET_CODE_PATTERN.test(code) || !email) return { error: 'Enter the 6-digit code' };
+    return { email, code };
+  }
+  if (action === 'reset-password') {
+    const otp = typeof input.otp === 'string' ? input.otp.trim() : '';
+    const newPassword = typeof input.password === 'string' ? input.password : '';
+    if (otp.length < 1 || otp.length > 512) return { error: 'Reset link is missing' };
+    if (newPassword.length < 6 || newPassword.length > 128) {
+      return { error: 'Password must be at least 6 characters' };
+    }
+    return { newPassword, otp };
+  }
   const password = typeof input.password === 'string' ? input.password : '';
   if (password.length < 6 || password.length > 128) {
     return { error: 'Password must be at least 6 characters' };
   }
-  return { email, password };
+  return { email: email ?? '', password };
+}
+
+function readRedirect(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const redirectTo = value.trim();
+  if (!redirectTo.startsWith('https://') && !redirectTo.startsWith('http://')) return null;
+  if (redirectTo.length > 300) return null;
+  return redirectTo;
+}
+
+function readResetToken(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const token = (payload as { token?: unknown }).token;
+  if (typeof token !== 'string') return null;
+  const trimmed = token.trim();
+  if (!trimmed || trimmed.length > 512) return null;
+  return trimmed;
 }
 
 async function readPayload(upstream: Response): Promise<unknown> {

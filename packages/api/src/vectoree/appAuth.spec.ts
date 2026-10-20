@@ -117,6 +117,48 @@ describe('vectoree app auth', () => {
     });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  test('sends a reset email and exchanges a 6-digit code without starting a session', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('exchange-reset-password-token')) {
+        return jsonResponse({ token: 'reset-token', expiresAt: '2026-01-01T00:00:00.000Z' });
+      }
+      if (String(url).includes('/email/reset-password')) {
+        return jsonResponse({ message: 'Password updated' });
+      }
+      return jsonResponse({ success: true, message: 'sent' }, 202);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const sent = await auth.submit({
+      action: 'send-reset',
+      email: 'A@Example.com',
+      redirectTo: 'https://chat.example/reset-password',
+    });
+    expect(sent).toEqual({ kind: 'response', status: 202, body: { ok: true } });
+    const exchanged = await auth.submit({
+      action: 'exchange-reset',
+      email: 'a@example.com',
+      code: '123456',
+    });
+    expect(exchanged).toEqual({
+      kind: 'response',
+      status: 200,
+      body: { resetToken: 'reset-token' },
+    });
+    const reset = await auth.submit({
+      action: 'reset-password',
+      password: 'new-secret',
+      otp: 'reset-token',
+    });
+    expect(reset).toEqual({ kind: 'response', status: 200, body: { ok: true } });
+    const bodies = fetchImpl.mock.calls.map((call) => JSON.parse(String((call as [string, RequestInit])[1].body)));
+    expect(bodies[0]).toEqual({
+      email: 'a@example.com',
+      redirectTo: 'https://chat.example/reset-password',
+    });
+    expect(bodies[1]).toEqual({ email: 'a@example.com', code: '123456' });
+    expect(bodies[2]).toEqual({ newPassword: 'new-secret', otp: 'reset-token' });
+  });
 });
 
 describe('linkVectoreeUser', () => {
