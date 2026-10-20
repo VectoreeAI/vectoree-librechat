@@ -194,8 +194,9 @@ scripts/activity-labels/results/
 /.lighthouse/
 /e2e/lighthouse/.test-results/
 
-# Advisor Cursor prompts (local only)
-prompts/
+# Advisor Cursor prompts (local only). Leading slash keeps packages/api/src/prompts
+# and api/app/clients/prompts, which the image build imports.
+/prompts/
 .vectoree/
 
 # Local agent state and OpenSpec planning stay untracked.
