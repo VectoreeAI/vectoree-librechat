@@ -56,11 +56,19 @@ RUN \
 
 COPY --chown=node:node . .
 
-RUN \
-    # React client build with configurable memory
-    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
-    npm prune --production; \
-    npm cache clean --force
+# Package builds must fail the image. A semicolon here used to keep going after
+# `rimraf dist`, then publish an image whose @librechat/api bundle was never emitted.
+RUN npm run build:data-provider \
+ && npm run build:data-schemas \
+ && npm run build:api \
+ && npm run build:client-package \
+ && test -s packages/api/dist/credentials.cjs
+
+RUN NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run build:client \
+ && test -s client/dist/index.html \
+ && npm prune --omit=dev \
+ && npm cache clean --force \
+ && test -s packages/api/dist/credentials.cjs
 
 # Optional build metadata surfaced in Settings -> About for support triage.
 # Declared here (after the heavy install/build steps) so that commit/date
