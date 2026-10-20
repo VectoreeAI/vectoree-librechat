@@ -4,8 +4,13 @@ import path from 'node:path';
 const ENV_LINE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=/;
 
 export function parseEnvFile(file: string): Record<string, string> {
-  if (!fs.existsSync(file)) return {};
-  return parseEnv(fs.readFileSync(file, 'utf8'));
+  try {
+    return parseEnv(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+    if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') return {};
+    throw error;
+  }
 }
 
 export function parseEnv(content: string): Record<string, string> {
