@@ -71,6 +71,10 @@ test('dev deploys after tests and main deploys after the backup', () => {
   assert.match(shared, /docker build -f Dockerfile/);
   assert.match(shared, /docker push "\$LIBRECHAT_IMAGE"/);
   assert.match(shared, /docker login "\$CI_REGISTRY"/);
+  assert.ok(
+    shared.indexOf('trap \'sudo docker logout "$CI_REGISTRY"') <
+      shared.indexOf('sudo -E bash "$DEPLOY_PATH/deploy/deploy-remote.sh"'),
+  );
   assert.match(dev, /extends: \.deploy/);
   assert.match(dev, /resource_group: librechat-development-deploy/);
   assert.match(dev, /\$CI_COMMIT_BRANCH == "dev"/);
