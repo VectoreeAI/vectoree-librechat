@@ -288,4 +288,77 @@ describe('linkVectoreeUser', () => {
       openidId: 'user-1',
     });
   });
+
+  test('email start registers a new address and asks for the code', async () => {
+    const fetchImpl = jest.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('/api/auth/users')) {
+        return jsonResponse({ requireEmailVerification: true }, 200);
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('Ada@Example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 200,
+      body: { requireEmailVerification: true },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.email).toBe('ada@example.com');
+    expect(typeof body.password).toBe('string');
+    expect(body.password.length).toBeGreaterThanOrEqual(8);
+  });
+
+  test('email start resends a code when the address already exists', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/users')) {
+        return jsonResponse({ code: 'AUTH_EMAIL_EXISTS', message: 'Email already exists' }, 409);
+      }
+      return jsonResponse({ ok: true }, 200);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 200,
+      body: { requireEmailVerification: true },
+    });
+    expect(String(fetchImpl.mock.calls[1]?.[0])).toContain('/api/auth/email/send-verification');
+  });
+
+  test('set password sends a code before it is entered', async () => {
+    const fetchImpl = jest.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse({ ok: true }, 200),
+    );
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.setPassword({
+      email: 'ada@example.com',
+      password: 'long-secret',
+      confirmPassword: 'long-secret',
+    });
+    expect(outcome).toEqual({ kind: 'response', status: 200, body: { codeSent: true } });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('/api/auth/email/send-reset-password');
+  });
+
+  test('set password exchanges the code and saves the new password', async () => {
+    const fetchImpl = jest.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('exchange-reset-password-token')) {
+        return jsonResponse({ token: 'reset-token' }, 200);
+      }
+      return jsonResponse({ ok: true }, 200);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.setPassword({
+      email: 'ada@example.com',
+      password: 'long-secret',
+      confirmPassword: 'long-secret',
+      code: '123456',
+    });
+    expect(outcome).toEqual({ kind: 'response', status: 200, body: { ok: true } });
+    const [, savedInit] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    const saved = JSON.parse(String(savedInit.body));
+    expect(saved).toEqual({ newPassword: 'long-secret', otp: 'reset-token' });
+  });
 });

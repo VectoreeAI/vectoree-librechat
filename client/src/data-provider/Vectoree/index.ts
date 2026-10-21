@@ -8,6 +8,7 @@ export {
   redeemPreviewTicketOnce,
   startVectoreeLink,
   submitVectoreeAppAuth,
+  submitVectoreePassword,
   useMarkVectoreeLinked,
   useVectoreeLinkPoll,
   useVectoreeLinkStatus,

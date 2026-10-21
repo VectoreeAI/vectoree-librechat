@@ -210,6 +210,19 @@ const AuthContextProvider = ({
     loginUser.mutate(data);
   };
 
+  const acceptSession = useCallback(
+    (session: { token: string; user?: t.TUser }) => {
+      setError(undefined);
+      setUserContext({
+        token: session.token,
+        isAuthenticated: true,
+        user: session.user,
+        redirect: '/c/new',
+      });
+    },
+    [setError, setUserContext],
+  );
+
   const silentRefresh = useCallback(() => {
     if (authConfig?.test === true) {
       return;
@@ -326,6 +339,7 @@ const AuthContextProvider = ({
       token,
       error,
       login,
+      acceptSession,
       logout,
       setError,
       roles: {
@@ -343,6 +357,7 @@ const AuthContextProvider = ({
     [
       user,
       error,
+      acceptSession,
       isAuthenticated,
       isAuthReady,
       token,

@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import type { VectoreeFetch } from './url';
 import { readErrorMessage } from './text';
 import { readDeployMode } from './mode';
@@ -38,6 +39,7 @@ export type AppAuthClientBody = {
   message?: string;
   requireEmailVerification?: boolean;
   ok?: boolean;
+  codeSent?: boolean;
   resetToken?: string;
 };
 
@@ -52,6 +54,19 @@ export type AppAuthSubmitInput = {
   otp?: unknown;
   code?: unknown;
   redirectTo?: unknown;
+};
+
+export type VectoreePasswordInput = {
+  email: string;
+  password: unknown;
+  confirmPassword: unknown;
+  code?: unknown;
+};
+
+export type VectoreeAppAuth = {
+  submit: (input: AppAuthSubmitInput) => Promise<AppAuthOutcome>;
+  start: (email: unknown) => Promise<AppAuthOutcome>;
+  setPassword: (input: VectoreePasswordInput) => Promise<AppAuthOutcome>;
 };
 
 export type VectoreeLinkedUser = {
@@ -100,15 +115,16 @@ export type LinkVectoreeUserResult =
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OTP_PATTERN = /^\d{8}$/;
+const RESET_CODE_PATTERN = /^\d{6}$/;
 
 export function createVectoreeAppAuth(options: {
   credentials: () => VectoreeAppCredentials | null;
   fetchImpl?: VectoreeFetch;
   env?: NodeJS.ProcessEnv;
-}) {
+}): VectoreeAppAuth {
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return {
+  const auth: VectoreeAppAuth = {
     async submit(input: AppAuthSubmitInput): Promise<AppAuthOutcome> {
       const action = readAction(input.action);
       if (!action) {
@@ -170,7 +186,56 @@ export function createVectoreeAppAuth(options: {
         message: readErrorMessage(payload, 'Could not sign in'),
       });
     },
+
+    async start(email: unknown): Promise<AppAuthOutcome> {
+      const password = randomBytes(24).toString('base64url');
+      const registered = await auth.submit({ action: 'register', email, password });
+      if (registered.kind === 'session') return registered;
+      if (registered.kind === 'response' && registered.body.requireEmailVerification) return registered;
+      if (registered.kind === 'response' && registered.status === 409) {
+        const sent = await auth.submit({ action: 'send-verification', email });
+        if (sent.kind === 'response' && sent.status < 400) {
+          return response(200, { requireEmailVerification: true });
+        }
+        return sent;
+      }
+      return registered;
+    },
+
+    async setPassword(input: VectoreePasswordInput): Promise<AppAuthOutcome> {
+      const email = readEmail(input.email);
+      const password = typeof input.password === 'string' ? input.password : '';
+      const confirmPassword = typeof input.confirmPassword === 'string' ? input.confirmPassword : '';
+      if (!email) return response(400, { message: 'Enter a valid email address' });
+      if (password.length < 8 || password.length > 128) {
+        return response(400, { message: 'Use at least 8 characters' });
+      }
+      if (password !== confirmPassword) {
+        return response(400, { message: 'Passwords do not match' });
+      }
+      const code = typeof input.code === 'string' ? input.code.trim() : '';
+      if (!RESET_CODE_PATTERN.test(code)) {
+        const sent = await auth.submit({ action: 'send-reset', email });
+        if (sent.kind === 'response' && sent.body.ok) {
+          return response(200, { codeSent: true });
+        }
+        return sent;
+      }
+      const exchanged = await auth.submit({ action: 'exchange-reset', email, code });
+      if (exchanged.kind !== 'response' || !exchanged.body.resetToken) {
+        return exchanged.kind === 'response'
+          ? exchanged
+          : response(502, { message: 'Could not reset password' });
+      }
+      return auth.submit({
+        action: 'reset-password',
+        password,
+        otp: exchanged.body.resetToken,
+      });
+    },
   };
+
+  return auth;
 }
 
 export async function linkVectoreeUser(
@@ -274,8 +339,6 @@ function readEmail(value: unknown): string | null {
   if (email.length > 120 || !EMAIL_PATTERN.test(email)) return null;
   return email;
 }
-
-const RESET_CODE_PATTERN = /^\d{6}$/;
 
 function actionBody(
   action: AppAuthAction,

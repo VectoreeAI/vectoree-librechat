@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { Button, SecretInput, Spinner, Input } from '@librechat/client';
 import type { FormEvent } from 'react';
 import type { VectoreeAppAuthResult } from '~/data-provider/Vectoree';
-import { getPostLoginRedirect, persistRedirectToSession } from '~/utils';
 import { submitVectoreeAppAuth } from '~/data-provider/Vectoree';
 import { ErrorMessage } from '~/components/Auth/ErrorMessage';
-import { useLocalize } from '~/hooks';
+import { useAuthContext, useLocalize } from '~/hooks';
+import { persistRedirectToSession } from '~/utils';
 
 const authInputClassName =
   'webkit-dark-styles transition-color peer h-auto w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 pb-2.5 pt-3 text-text-primary duration-200 hover:border-border-light focus:border-accent-primary focus:outline-none focus-visible:border-accent-primary';
@@ -16,9 +16,13 @@ const authLabelClassName =
 const authSecretButtonClassName =
   'size-9 rounded-xl text-text-secondary-alt hover:bg-transparent hover:text-text-primary';
 
+type LoginMethod = 'email' | 'password';
+
 export default function VectoreeLogin() {
   const localize = useLocalize();
   const navigate = useNavigate();
+  const { acceptSession } = useAuthContext();
+  const [method, setMethod] = useState<LoginMethod>('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
@@ -37,10 +41,18 @@ export default function VectoreeLogin() {
       navigate(`/login/2fa?tempToken=${encodeURIComponent(result.tempToken)}`, { replace: true });
       return;
     }
-    const redirect = getPostLoginRedirect(new URLSearchParams(window.location.search)) ?? '/c/new';
-    const base = document.querySelector('base')?.getAttribute('href') || '/';
-    const prefix = base.endsWith('/') ? base.slice(0, -1) : base;
-    window.location.assign(`${prefix}${redirect}`);
+    if (!result.token) {
+      throw new Error(result.message || localize('com_auth_vectoree_login_failed'));
+    }
+    acceptSession({ token: result.token, user: result.user });
+  }
+
+  function selectMethod(next: LoginMethod) {
+    setMethod(next);
+    setNeedsCode(false);
+    setCode('');
+    setMessage(null);
+    setNotice(null);
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -50,12 +62,12 @@ export default function VectoreeLogin() {
       setMessage(localize('com_auth_email_required'));
       return;
     }
-    if (!needsCode && password.length < 6) {
-      setMessage(localize('com_auth_vectoree_password_min'));
-      return;
-    }
     if (needsCode && !/^\d{8}$/.test(code.trim())) {
       setMessage(localize('com_auth_vectoree_login_code_hint'));
+      return;
+    }
+    if (!needsCode && method === 'password' && password.length < 6) {
+      setMessage(localize('com_auth_vectoree_password_min'));
       return;
     }
 
@@ -76,39 +88,20 @@ export default function VectoreeLogin() {
         return;
       }
 
-      const signedUp = await submitVectoreeAppAuth({
-        action: 'register',
-        email: trimmedEmail,
-        password,
-      });
-      if (signedUp.token || signedUp.twoFAPending) {
-        enterApp(signedUp);
+      const started =
+        method === 'email'
+          ? await submitVectoreeAppAuth({ action: 'start', email: trimmedEmail })
+          : await submitVectoreeAppAuth({ action: 'login', email: trimmedEmail, password });
+      if (started.token || started.twoFAPending) {
+        enterApp(started);
         return;
       }
-      if (signedUp.requireEmailVerification) {
+      if (started.requireEmailVerification) {
         setNeedsCode(true);
         setNotice(localize('com_auth_vectoree_login_code_hint'));
         return;
       }
-      if (signedUp.status !== 409) {
-        throw new Error(signedUp.message || localize('com_auth_vectoree_login_failed'));
-      }
-
-      const session = await submitVectoreeAppAuth({
-        action: 'login',
-        email: trimmedEmail,
-        password,
-      });
-      if (session.token || session.twoFAPending) {
-        enterApp(session);
-        return;
-      }
-      if (session.requireEmailVerification) {
-        setNeedsCode(true);
-        setNotice(localize('com_auth_vectoree_login_code_hint'));
-        return;
-      }
-      throw new Error(session.message || localize('com_auth_vectoree_login_failed'));
+      throw new Error(started.message || localize('com_auth_vectoree_login_failed'));
     } catch (error) {
       const fallback = localize('com_auth_vectoree_login_failed');
       setMessage(error instanceof Error ? error.message : fallback);
@@ -139,11 +132,42 @@ export default function VectoreeLogin() {
     }
   }
 
+  const description =
+    method === 'password'
+      ? localize('com_auth_vectoree_login_password_description')
+      : localize('com_auth_vectoree_login_description');
+
   return (
     <>
-      <p className="mb-4 text-center text-sm text-text-secondary">
-        {localize('com_auth_vectoree_login_description')}
-      </p>
+      <div
+        role="tablist"
+        aria-label={localize('com_auth_vectoree_login_title')}
+        className="mb-4 grid grid-cols-2 gap-1 rounded-2xl bg-surface-secondary p-1"
+      >
+        <button
+          type="button"
+          role="tab"
+          id="vectoree-login-email-tab"
+          aria-selected={method === 'email'}
+          aria-controls="vectoree-login-panel"
+          className={`rounded-xl px-3 py-2 text-sm ${method === 'email' ? 'bg-surface-primary text-text-primary' : 'text-text-secondary'}`}
+          onClick={() => selectMethod('email')}
+        >
+          {localize('com_auth_vectoree_login_email_tab')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="vectoree-login-password-tab"
+          aria-selected={method === 'password'}
+          aria-controls="vectoree-login-panel"
+          className={`rounded-xl px-3 py-2 text-sm ${method === 'password' ? 'bg-surface-primary text-text-primary' : 'text-text-secondary'}`}
+          onClick={() => selectMethod('password')}
+        >
+          {localize('com_auth_vectoree_login_password_tab')}
+        </button>
+      </div>
+      <p className="mb-4 text-center text-sm text-text-secondary">{description}</p>
       {message ? <ErrorMessage>{message}</ErrorMessage> : null}
       {notice ? (
         <p className="mb-4 text-center text-sm text-text-primary" role="status">
@@ -151,6 +175,9 @@ export default function VectoreeLogin() {
         </p>
       ) : null}
       <form
+        id="vectoree-login-panel"
+        role="tabpanel"
+        aria-labelledby={method === 'email' ? 'vectoree-login-email-tab' : 'vectoree-login-password-tab'}
         className="mt-6"
         aria-label={localize('com_auth_vectoree_login_title')}
         method="POST"
@@ -175,7 +202,7 @@ export default function VectoreeLogin() {
             </label>
           </div>
         </div>
-        {needsCode ? null : (
+        {!needsCode && method === 'password' ? (
           <div className="mb-4">
             <div className="relative">
               <SecretInput
@@ -195,7 +222,7 @@ export default function VectoreeLogin() {
               />
             </div>
           </div>
-        )}
+        ) : null}
         {needsCode ? (
           <div className="mb-4">
             <div className="relative">
