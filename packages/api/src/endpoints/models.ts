@@ -175,9 +175,12 @@ export async function fetchModels({
     return models;
   }
 
+  if (!apiKey) {
+    return models;
+  }
   const unresolvedKey = envVarRegex.test(apiKey.trim());
   const unresolvedBase = baseURL != null && envVarRegex.test(baseURL.trim());
-  if (!apiKey || unresolvedKey || unresolvedBase) {
+  if (unresolvedKey || unresolvedBase) {
     return models;
   }
 

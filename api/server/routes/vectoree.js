@@ -215,7 +215,7 @@ router.post(
       }
       const outcome =
         body.action === 'start'
-          ? await appAuth.start(body.email)
+          ? await appAuth.start(body.email, body.password)
           : await appAuth.submit({
               action: body.action,
               email: body.email,

@@ -40,6 +40,8 @@ export type AppAuthClientBody = {
   requireEmailVerification?: boolean;
   ok?: boolean;
   codeSent?: boolean;
+  requirePassword?: boolean;
+  usePassword?: boolean;
   resetToken?: string;
 };
 
@@ -65,7 +67,7 @@ export type VectoreePasswordInput = {
 
 export type VectoreeAppAuth = {
   submit: (input: AppAuthSubmitInput) => Promise<AppAuthOutcome>;
-  start: (email: unknown) => Promise<AppAuthOutcome>;
+  start: (email: unknown, password?: unknown) => Promise<AppAuthOutcome>;
   setPassword: (input: VectoreePasswordInput) => Promise<AppAuthOutcome>;
 };
 
@@ -187,19 +189,17 @@ export function createVectoreeAppAuth(options: {
       });
     },
 
-    async start(email: unknown): Promise<AppAuthOutcome> {
-      const password = randomBytes(24).toString('base64url');
-      const registered = await auth.submit({ action: 'register', email, password });
-      if (registered.kind === 'session') return registered;
-      if (registered.kind === 'response' && registered.body.requireEmailVerification) return registered;
-      if (registered.kind === 'response' && registered.status === 409) {
-        const sent = await auth.submit({ action: 'send-verification', email });
-        if (sent.kind === 'response' && sent.status < 400) {
-          return response(200, { requireEmailVerification: true });
-        }
-        return sent;
+    async start(email: unknown, password?: unknown): Promise<AppAuthOutcome> {
+      const address = readEmail(email);
+      if (!address) return response(400, { message: 'Enter a valid email address' });
+      const verificationRequired = await readVerificationRequired(fetchImpl, options.credentials);
+      if (verificationRequired === null) {
+        return response(502, { message: 'Could not reach Vectoree' });
       }
-      return registered;
+      if (!verificationRequired) {
+        return registerWithChosenPassword(address, password);
+      }
+      return registerWithCode(address);
     },
 
     async setPassword(input: VectoreePasswordInput): Promise<AppAuthOutcome> {
@@ -234,6 +234,41 @@ export function createVectoreeAppAuth(options: {
       });
     },
   };
+
+  async function registerWithChosenPassword(
+    email: string,
+    password: unknown,
+  ): Promise<AppAuthOutcome> {
+    if (typeof password !== 'string' || password.length === 0) {
+      return response(200, { requirePassword: true });
+    }
+    const registered = await auth.submit({ action: 'register', email, password });
+    if (registered.kind === 'response' && registered.status === 409) {
+      return response(409, {
+        usePassword: true,
+        message: 'This email already has an account. Sign in with the password tab.',
+      });
+    }
+    return registered;
+  }
+
+  async function registerWithCode(email: string): Promise<AppAuthOutcome> {
+    const password = randomBytes(24).toString('base64url');
+    const registered = await auth.submit({ action: 'register', email, password });
+    if (registered.kind === 'session') {
+      if (registered.user.emailVerified) return registered;
+      return response(403, { message: 'Confirm this email before signing in' });
+    }
+    if (registered.kind === 'response' && registered.body.requireEmailVerification) return registered;
+    if (registered.kind === 'response' && registered.status === 409) {
+      const sent = await auth.submit({ action: 'send-verification', email });
+      if (sent.kind === 'response' && sent.status < 400) {
+        return response(200, { requireEmailVerification: true });
+      }
+      return sent;
+    }
+    return registered;
+  }
 
   return auth;
 }
@@ -331,6 +366,27 @@ function readAction(value: unknown): AppAuthAction | null {
     return value;
   }
   return null;
+}
+
+async function readVerificationRequired(
+  fetchImpl: VectoreeFetch,
+  credentials: () => VectoreeAppCredentials | null,
+): Promise<boolean | null> {
+  const current = credentials();
+  if (!current?.apiKey || !current.apiUrl) return null;
+  let upstream: Response;
+  try {
+    upstream = await fetchImpl(`${current.apiUrl}/api/auth/methods?client_type=server`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${current.apiKey}` },
+    });
+  } catch {
+    return null;
+  }
+  const payload = await readPayload(upstream);
+  if (!upstream.ok || !payload || typeof payload !== 'object') return null;
+  const required = (payload as { requireEmailVerification?: unknown }).requireEmailVerification;
+  return typeof required === 'boolean' ? required : null;
 }
 
 function readEmail(value: unknown): string | null {

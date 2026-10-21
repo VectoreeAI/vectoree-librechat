@@ -25,8 +25,10 @@ export default function VectoreeLogin() {
   const [method, setMethod] = useState<LoginMethod>('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [code, setCode] = useState('');
   const [needsCode, setNeedsCode] = useState(false);
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -50,6 +52,8 @@ export default function VectoreeLogin() {
   function selectMethod(next: LoginMethod) {
     setMethod(next);
     setNeedsCode(false);
+    setNeedsPassword(false);
+    setConfirmPassword('');
     setCode('');
     setMessage(null);
     setNotice(null);
@@ -66,8 +70,12 @@ export default function VectoreeLogin() {
       setMessage(localize('com_auth_vectoree_login_code_hint'));
       return;
     }
-    if (!needsCode && method === 'password' && password.length < 6) {
+    if (!needsCode && (method === 'password' || needsPassword) && password.length < 6) {
       setMessage(localize('com_auth_vectoree_password_min'));
+      return;
+    }
+    if (needsPassword && password !== confirmPassword) {
+      setMessage(localize('com_auth_vectoree_password_mismatch'));
       return;
     }
 
@@ -90,14 +98,30 @@ export default function VectoreeLogin() {
 
       const started =
         method === 'email'
-          ? await submitVectoreeAppAuth({ action: 'start', email: trimmedEmail })
+          ? await submitVectoreeAppAuth({
+              action: 'start',
+              email: trimmedEmail,
+              ...(needsPassword ? { password } : {}),
+            })
           : await submitVectoreeAppAuth({ action: 'login', email: trimmedEmail, password });
       if (started.token || started.twoFAPending) {
         enterApp(started);
         return;
       }
+      if (started.requirePassword) {
+        setNeedsPassword(true);
+        setNotice(localize('com_auth_vectoree_login_set_password'));
+        return;
+      }
+      if (started.usePassword) {
+        setNeedsPassword(false);
+        setMethod('password');
+        setMessage(localize('com_auth_vectoree_login_use_password'));
+        return;
+      }
       if (started.requireEmailVerification) {
         setNeedsCode(true);
+        setNeedsPassword(false);
         setNotice(localize('com_auth_vectoree_login_code_hint'));
         return;
       }
@@ -132,8 +156,9 @@ export default function VectoreeLogin() {
     }
   }
 
-  const description =
-    method === 'password'
+  const description = needsPassword
+    ? localize('com_auth_vectoree_login_set_password')
+    : method === 'password'
       ? localize('com_auth_vectoree_login_password_description')
       : localize('com_auth_vectoree_login_description');
 
@@ -202,18 +227,39 @@ export default function VectoreeLogin() {
             </label>
           </div>
         </div>
-        {!needsCode && method === 'password' ? (
+        {!needsCode && (method === 'password' || needsPassword) ? (
           <div className="mb-4">
             <div className="relative">
               <SecretInput
                 id="password"
-                autoComplete="current-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 aria-label={localize('com_auth_password')}
                 className={authSecretInputClassName}
                 placeholder=" "
                 label={localize('com_auth_password')}
+                labelClassName={authLabelClassName}
+                controlsClassName="right-2"
+                buttonClassName={authSecretButtonClassName}
+                required
+                minLength={6}
+                autoComplete={needsPassword ? 'new-password' : 'current-password'}
+              />
+            </div>
+          </div>
+        ) : null}
+        {needsPassword ? (
+          <div className="mb-4">
+            <div className="relative">
+              <SecretInput
+                id="confirm-password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                aria-label={localize('com_auth_vectoree_password_confirm')}
+                className={authSecretInputClassName}
+                placeholder=" "
+                label={localize('com_auth_vectoree_password_confirm')}
                 labelClassName={authLabelClassName}
                 controlsClassName="right-2"
                 buttonClassName={authSecretButtonClassName}

@@ -209,6 +209,8 @@ export type VectoreeAppAuthResult = {
   ok: boolean;
   status: number;
   requireEmailVerification: boolean;
+  requirePassword: boolean;
+  usePassword: boolean;
   token?: string;
   user?: TUser;
   resetToken?: string;
@@ -262,6 +264,8 @@ export async function submitVectoreeAppAuth(input: {
     ok: response.ok,
     status: response.status,
     requireEmailVerification: record.requireEmailVerification === true,
+    requirePassword: record.requirePassword === true,
+    usePassword: record.usePassword === true,
     ...(typeof record.token === 'string' ? { token: record.token } : {}),
     ...(user ? { user } : {}),
     ...(typeof record.resetToken === 'string' ? { resetToken: record.resetToken } : {}),

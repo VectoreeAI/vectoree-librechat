@@ -16,6 +16,16 @@ function credentials() {
   return { apiUrl: API, apiKey: KEY };
 }
 
+function methodsBody(requireEmailVerification: boolean) {
+  return {
+    email: true,
+    codeLength: 8,
+    verifyEmailMethod: 'code',
+    requireEmailVerification,
+    oauth: [],
+  };
+}
+
 describe('vectoree app auth', () => {
   test('cloud identities include the project so user ids cannot collide', () => {
     const projectId = '11111111-2222-4333-8444-555555555555';
@@ -291,6 +301,7 @@ describe('linkVectoreeUser', () => {
 
   test('email start registers a new address and asks for the code', async () => {
     const fetchImpl = jest.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
       if (String(url).includes('/api/auth/users')) {
         return jsonResponse({ requireEmailVerification: true }, 200);
       }
@@ -303,8 +314,8 @@ describe('linkVectoreeUser', () => {
       status: 200,
       body: { requireEmailVerification: true },
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [, init] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.email).toBe('ada@example.com');
     expect(typeof body.password).toBe('string');
@@ -313,6 +324,7 @@ describe('linkVectoreeUser', () => {
 
   test('email start resends a code when the address already exists', async () => {
     const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
       if (String(url).includes('/api/auth/users')) {
         return jsonResponse({ code: 'AUTH_EMAIL_EXISTS', message: 'Email already exists' }, 409);
       }
@@ -325,7 +337,7 @@ describe('linkVectoreeUser', () => {
       status: 200,
       body: { requireEmailVerification: true },
     });
-    expect(String(fetchImpl.mock.calls[1]?.[0])).toContain('/api/auth/email/send-verification');
+    expect(String(fetchImpl.mock.calls[2]?.[0])).toContain('/api/auth/email/send-verification');
   });
 
   test('set password sends a code before it is entered', async () => {
@@ -360,5 +372,62 @@ describe('linkVectoreeUser', () => {
     const [, savedInit] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
     const saved = JSON.parse(String(savedInit.body));
     expect(saved).toEqual({ newPassword: 'long-secret', otp: 'reset-token' });
+  });
+
+  test('asks for a password instead of registering when email verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      throw new Error(`unexpected ${url}`);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({ kind: 'response', status: 200, body: { requirePassword: true } });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test('registers with the chosen password when email verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      return jsonResponse({
+        accessToken: 'app-user-jwt',
+        user: { id: 'user-1', email: 'ada@example.com', emailVerified: false },
+      });
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com', 'secret1');
+    expect(outcome).toMatchObject({
+      kind: 'session',
+      user: { email: 'ada@example.com', emailVerified: false },
+    });
+    const [, init] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'ada@example.com', password: 'secret1' });
+  });
+
+  test('sends an existing email to the password tab when verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      return jsonResponse({ code: 'AUTH_EMAIL_EXISTS' }, 409);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com', 'secret1');
+    expect(outcome).toMatchObject({ kind: 'response', status: 409, body: { usePassword: true } });
+    expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes('send-verification'))).toBe(false);
+  });
+
+  test('refuses an unverified session from registration when verification is required', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
+      return jsonResponse({
+        accessToken: 'app-user-jwt',
+        user: { id: 'user-1', email: 'ada@example.com', emailVerified: false },
+      });
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 403,
+      body: { message: 'Confirm this email before signing in' },
+    });
   });
 });
