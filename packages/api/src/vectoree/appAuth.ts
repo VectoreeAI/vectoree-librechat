@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import type { VectoreeFetch } from './url';
 import { readErrorMessage } from './text';
 import { readDeployMode } from './mode';
@@ -38,6 +39,9 @@ export type AppAuthClientBody = {
   message?: string;
   requireEmailVerification?: boolean;
   ok?: boolean;
+  codeSent?: boolean;
+  requirePassword?: boolean;
+  usePassword?: boolean;
   resetToken?: string;
 };
 
@@ -52,6 +56,19 @@ export type AppAuthSubmitInput = {
   otp?: unknown;
   code?: unknown;
   redirectTo?: unknown;
+};
+
+export type VectoreePasswordInput = {
+  email: string;
+  password: unknown;
+  confirmPassword: unknown;
+  code?: unknown;
+};
+
+export type VectoreeAppAuth = {
+  submit: (input: AppAuthSubmitInput) => Promise<AppAuthOutcome>;
+  start: (email: unknown, password?: unknown) => Promise<AppAuthOutcome>;
+  setPassword: (input: VectoreePasswordInput) => Promise<AppAuthOutcome>;
 };
 
 export type VectoreeLinkedUser = {
@@ -100,15 +117,19 @@ export type LinkVectoreeUserResult =
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OTP_PATTERN = /^\d{8}$/;
+const RESET_CODE_PATTERN = /^\d{6}$/;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_LENGTH = 128;
+const PASSWORD_LENGTH_MESSAGE = 'Use at least 8 characters';
 
 export function createVectoreeAppAuth(options: {
   credentials: () => VectoreeAppCredentials | null;
   fetchImpl?: VectoreeFetch;
   env?: NodeJS.ProcessEnv;
-}) {
+}): VectoreeAppAuth {
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  return {
+  const auth: VectoreeAppAuth = {
     async submit(input: AppAuthSubmitInput): Promise<AppAuthOutcome> {
       const action = readAction(input.action);
       if (!action) {
@@ -170,7 +191,90 @@ export function createVectoreeAppAuth(options: {
         message: readErrorMessage(payload, 'Could not sign in'),
       });
     },
+
+    async start(email: unknown, password?: unknown): Promise<AppAuthOutcome> {
+      const address = readEmail(email);
+      if (!address) return response(400, { message: 'Enter a valid email address' });
+      const verificationRequired = await readVerificationRequired(fetchImpl, options.credentials);
+      if (verificationRequired === null) {
+        return response(502, { message: 'Could not reach Vectoree' });
+      }
+      if (!verificationRequired) {
+        return registerWithChosenPassword(address, password);
+      }
+      return registerWithCode(address);
+    },
+
+    async setPassword(input: VectoreePasswordInput): Promise<AppAuthOutcome> {
+      const email = readEmail(input.email);
+      const password = typeof input.password === 'string' ? input.password : '';
+      const confirmPassword = typeof input.confirmPassword === 'string' ? input.confirmPassword : '';
+      if (!email) return response(400, { message: 'Enter a valid email address' });
+      const passwordError = passwordLengthError(password);
+      if (passwordError) return response(400, { message: passwordError });
+      if (password !== confirmPassword) {
+        return response(400, { message: 'Passwords do not match' });
+      }
+      const code = typeof input.code === 'string' ? input.code.trim() : '';
+      if (!RESET_CODE_PATTERN.test(code)) {
+        const sent = await auth.submit({ action: 'send-reset', email });
+        if (sent.kind === 'response' && sent.body.ok) {
+          return response(200, { codeSent: true });
+        }
+        return sent;
+      }
+      const exchanged = await auth.submit({ action: 'exchange-reset', email, code });
+      if (exchanged.kind !== 'response' || !exchanged.body.resetToken) {
+        return exchanged.kind === 'response'
+          ? exchanged
+          : response(502, { message: 'Could not reset password' });
+      }
+      return auth.submit({
+        action: 'reset-password',
+        password,
+        otp: exchanged.body.resetToken,
+      });
+    },
   };
+
+  async function registerWithChosenPassword(
+    email: string,
+    password: unknown,
+  ): Promise<AppAuthOutcome> {
+    if (typeof password !== 'string' || password.length === 0) {
+      return response(200, { requirePassword: true });
+    }
+    const passwordError = passwordLengthError(password);
+    if (passwordError) return response(400, { message: passwordError });
+    const registered = await auth.submit({ action: 'register', email, password });
+    if (registered.kind === 'response' && registered.status === 409) {
+      return response(409, {
+        usePassword: true,
+        message: 'This email already has an account. Sign in with the password tab.',
+      });
+    }
+    return registered;
+  }
+
+  async function registerWithCode(email: string): Promise<AppAuthOutcome> {
+    const password = randomBytes(24).toString('base64url');
+    const registered = await auth.submit({ action: 'register', email, password });
+    if (registered.kind === 'session') {
+      if (registered.user.emailVerified) return registered;
+      return response(403, { message: 'Confirm this email before signing in' });
+    }
+    if (registered.kind === 'response' && registered.body.requireEmailVerification) return registered;
+    if (registered.kind === 'response' && registered.status === 409) {
+      const sent = await auth.submit({ action: 'send-verification', email });
+      if (sent.kind === 'response' && sent.status < 400) {
+        return response(200, { requireEmailVerification: true });
+      }
+      return sent;
+    }
+    return registered;
+  }
+
+  return auth;
 }
 
 export async function linkVectoreeUser(
@@ -268,14 +372,33 @@ function readAction(value: unknown): AppAuthAction | null {
   return null;
 }
 
+async function readVerificationRequired(
+  fetchImpl: VectoreeFetch,
+  credentials: () => VectoreeAppCredentials | null,
+): Promise<boolean | null> {
+  const current = credentials();
+  if (!current?.apiKey || !current.apiUrl) return null;
+  let upstream: Response;
+  try {
+    upstream = await fetchImpl(`${current.apiUrl}/api/auth/methods?client_type=server`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${current.apiKey}` },
+    });
+  } catch {
+    return null;
+  }
+  const payload = await readPayload(upstream);
+  if (!upstream.ok || !payload || typeof payload !== 'object') return null;
+  const required = (payload as { requireEmailVerification?: unknown }).requireEmailVerification;
+  return typeof required === 'boolean' ? required : null;
+}
+
 function readEmail(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const email = value.trim().toLowerCase();
   if (email.length > 120 || !EMAIL_PATTERN.test(email)) return null;
   return email;
 }
-
-const RESET_CODE_PATTERN = /^\d{6}$/;
 
 function actionBody(
   action: AppAuthAction,
@@ -307,16 +430,21 @@ function actionBody(
     const otp = typeof input.otp === 'string' ? input.otp.trim() : '';
     const newPassword = typeof input.password === 'string' ? input.password : '';
     if (otp.length < 1 || otp.length > 512) return { error: 'Reset link is missing' };
-    if (newPassword.length < 6 || newPassword.length > 128) {
-      return { error: 'Password must be at least 6 characters' };
-    }
+    const resetError = passwordLengthError(newPassword);
+    if (resetError) return { error: resetError };
     return { newPassword, otp };
   }
   const password = typeof input.password === 'string' ? input.password : '';
-  if (password.length < 6 || password.length > 128) {
-    return { error: 'Password must be at least 6 characters' };
-  }
+  const passwordError = passwordLengthError(password);
+  if (passwordError) return { error: passwordError };
   return { email: email ?? '', password };
+}
+
+function passwordLengthError(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    return PASSWORD_LENGTH_MESSAGE;
+  }
+  return null;
 }
 
 function readRedirect(value: unknown): string | null {

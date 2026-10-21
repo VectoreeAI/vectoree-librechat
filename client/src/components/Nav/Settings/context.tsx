@@ -31,6 +31,7 @@ export function useSettingsContext(): SettingsContextValue {
   const langfuseConnectionAccess = startupConfig?.langfuseConnectionAccess === true;
   const adminPanelURL = startupConfig?.adminPanelURL ?? '';
   const isLocalProvider = user?.provider === 'local';
+  const isVectoreeProvider = user?.provider === 'vectoree';
   const twoFactorEnabled = user?.twoFactorEnabled === true;
   const allowAccountDeletion = startupConfig?.allowAccountDeletion !== false;
   const aboutEnabled = startupConfig?.interface?.buildInfo !== false;
@@ -53,6 +54,7 @@ export function useSettingsContext(): SettingsContextValue {
       hasMultiConvo: hasMultiConvoBool,
       hasPrompts: hasPromptsBool,
       isLocalProvider,
+      isVectoreeProvider,
       twoFactorEnabled,
       allowAccountDeletion,
       aboutEnabled,
@@ -70,6 +72,7 @@ export function useSettingsContext(): SettingsContextValue {
       hasMultiConvoBool,
       hasPromptsBool,
       isLocalProvider,
+      isVectoreeProvider,
       twoFactorEnabled,
       allowAccountDeletion,
       aboutEnabled,

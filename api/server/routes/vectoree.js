@@ -213,14 +213,17 @@ router.post(
           message: 'Set DOMAIN_CLIENT or DOMAIN_SERVER to an https address before sending a reset link',
         });
       }
-      const outcome = await appAuth.submit({
-        action: body.action,
-        email: body.email,
-        password: body.password,
-        otp: body.otp,
-        code: body.code,
-        redirectTo,
-      });
+      const outcome =
+        body.action === 'start'
+          ? await appAuth.start(body.email, body.password)
+          : await appAuth.submit({
+              action: body.action,
+              email: body.email,
+              password: body.password,
+              otp: body.otp,
+              code: body.code,
+              redirectTo,
+            });
       if (outcome.kind === 'response') {
         return res.status(outcome.status).json(outcome.body);
       }
@@ -265,6 +268,35 @@ router.post(
     } catch {
       logger.error('[vectoree-app-auth] sign-in failed');
       return res.status(500).json({ message: 'Could not sign in' });
+    }
+  },
+);
+
+router.post(
+  '/account/password',
+  preAuthTenantMiddleware,
+  middleware.requireJwtAuth,
+  middleware.requireSameOrigin,
+  middleware.loginLimiter,
+  async (req, res) => {
+    try {
+      if (req.user?.provider !== 'vectoree' || typeof req.user.email !== 'string') {
+        return res.status(403).json({ message: 'Could not set password' });
+      }
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const outcome = await appAuth.setPassword({
+        email: req.user.email,
+        password: body.password,
+        confirmPassword: body.confirmPassword,
+        code: body.code,
+      });
+      if (outcome.kind !== 'response') {
+        return res.status(500).json({ message: 'Could not set password' });
+      }
+      return res.status(outcome.status).json(outcome.body);
+    } catch {
+      logger.error('[vectoree-password] could not set password');
+      return res.status(500).json({ message: 'Could not set password' });
     }
   },
 );

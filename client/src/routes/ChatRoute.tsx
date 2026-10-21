@@ -240,7 +240,10 @@ export default function ChatRoute() {
       return specPreset;
     };
 
-    if (isNewConvo && endpointsQuery.data && modelsQuery.data) {
+    const endpointsReady = endpointsQuery.isSuccess || endpointsQuery.isError;
+    const modelsStillLoading = Boolean(modelsQuery.data?.initial) && modelsQuery.fetchStatus === 'fetching';
+    const modelsReady = Boolean(modelsQuery.data) && (!modelsStillLoading || modelsQuery.isError);
+    if (isNewConvo && endpointsReady && modelsReady && modelsQuery.data) {
       const preset = getNewConvoPreset();
 
       logger.log('conversation', 'ChatRoute, new convo effect', conversation);
@@ -324,7 +327,11 @@ export default function ChatRoute() {
     initialConvoQuery.data,
     initialConvoQuery.isError,
     endpointsQuery.data,
+    endpointsQuery.isSuccess,
+    endpointsQuery.isError,
     modelsQuery.data,
+    modelsQuery.isError,
+    modelsQuery.fetchStatus,
     assistantListMap,
     chatProjectId,
     projectQuery.data?._id,
@@ -335,7 +342,12 @@ export default function ChatRoute() {
     conversation?.conversationId,
   ]);
 
-  if (endpointsQuery.isLoading || modelsQuery.isLoading) {
+  const openingNewChat = conversationId === Constants.NEW_CONVO && conversation == null;
+  const fetchingConvoData =
+    conversation == null &&
+    (endpointsQuery.fetchStatus === 'fetching' || modelsQuery.fetchStatus === 'fetching');
+  const waitingForRole = openingNewChat && roles?.USER == null;
+  if (isAuthenticated && (fetchingConvoData || waitingForRole)) {
     return (
       <div className="flex h-screen items-center justify-center" aria-live="polite" role="status">
         <Spinner className="text-text-primary" />

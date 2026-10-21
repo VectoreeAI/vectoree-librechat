@@ -1,6 +1,7 @@
-import { apiBaseUrl } from 'librechat-data-provider';
+import { apiBaseUrl, request } from 'librechat-data-provider';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryObserverResult } from '@tanstack/react-query';
+import type { TUser } from 'librechat-data-provider';
 
 export const vectoreeLinkStatusKey = ['vectoreeLinkStatus'] as const;
 export const vectoreeLinkPollKey = ['vectoreeLinkPoll'] as const;
@@ -208,15 +209,43 @@ export type VectoreeAppAuthResult = {
   ok: boolean;
   status: number;
   requireEmailVerification: boolean;
+  requirePassword: boolean;
+  usePassword: boolean;
   token?: string;
+  user?: TUser;
   resetToken?: string;
   twoFAPending?: boolean;
   tempToken?: string;
   message?: string;
 };
 
+function readSessionUser(value: unknown): TUser | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const user = value as Record<string, unknown>;
+  if (typeof user.id !== 'string' || typeof user.email !== 'string') return undefined;
+  return {
+    id: user.id,
+    email: user.email,
+    username: typeof user.username === 'string' ? user.username : user.email,
+    name: typeof user.name === 'string' ? user.name : '',
+    avatar: typeof user.avatar === 'string' ? user.avatar : '',
+    role: typeof user.role === 'string' ? user.role : 'USER',
+    provider: typeof user.provider === 'string' ? user.provider : 'vectoree',
+    createdAt: typeof user.createdAt === 'string' ? user.createdAt : '',
+    updatedAt: typeof user.updatedAt === 'string' ? user.updatedAt : '',
+  };
+}
+
 export async function submitVectoreeAppAuth(input: {
-  action: 'register' | 'login' | 'verify' | 'send-verification' | 'send-reset' | 'exchange-reset' | 'reset-password';
+  action:
+    | 'start'
+    | 'register'
+    | 'login'
+    | 'verify'
+    | 'send-verification'
+    | 'send-reset'
+    | 'exchange-reset'
+    | 'reset-password';
   email?: string;
   password?: string;
   otp?: string;
@@ -230,16 +259,44 @@ export async function submitVectoreeAppAuth(input: {
   });
   const data = await readJson(response);
   const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+  const user = readSessionUser(record.user);
   return {
     ok: response.ok,
     status: response.status,
     requireEmailVerification: record.requireEmailVerification === true,
+    requirePassword: record.requirePassword === true,
+    usePassword: record.usePassword === true,
     ...(typeof record.token === 'string' ? { token: record.token } : {}),
+    ...(user ? { user } : {}),
     ...(typeof record.resetToken === 'string' ? { resetToken: record.resetToken } : {}),
     ...(record.twoFAPending === true ? { twoFAPending: true } : {}),
     ...(typeof record.tempToken === 'string' ? { tempToken: record.tempToken } : {}),
     ...(typeof record.message === 'string' ? { message: record.message } : {}),
   };
+}
+
+export async function submitVectoreePassword(input: {
+  password: string;
+  confirmPassword: string;
+  code?: string;
+}): Promise<{ ok: boolean; codeSent: boolean; message?: string }> {
+  try {
+    const data: unknown = await request.post(vectoreeUrl('/api/vectoree/account/password'), input);
+    const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    return {
+      ok: true,
+      codeSent: record.codeSent === true,
+      ...(typeof record.message === 'string' ? { message: record.message } : {}),
+    };
+  } catch (error) {
+    const response = (error as { response?: { data?: { message?: unknown } } }).response;
+    const message = response?.data?.message;
+    return {
+      ok: false,
+      codeSent: false,
+      ...(typeof message === 'string' ? { message } : {}),
+    };
+  }
 }
 
 export function useMarkVectoreeLinked() {

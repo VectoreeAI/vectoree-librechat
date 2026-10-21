@@ -47,8 +47,12 @@ function RequestPasswordReset() {
       setMessage(localize('com_auth_vectoree_reset_code_hint'));
       return;
     }
-    if (password.length < 6) {
+    if (password.length < 8) {
       setMessage(localize('com_auth_vectoree_password_min'));
+      return;
+    }
+    if (password.length > 128) {
+      setMessage(localize('com_auth_password_max_length'));
       return;
     }
     setSubmitting(true);
@@ -138,6 +142,8 @@ function RequestPasswordReset() {
         labelClassName="absolute start-3 top-1.5 z-10 origin-[0] -translate-y-4 scale-75 transform bg-surface-primary px-2 text-sm text-text-secondary-alt"
         controlsClassName="right-2"
         buttonClassName="size-9 rounded-xl text-text-secondary-alt hover:bg-transparent hover:text-text-primary"
+        minLength={8}
+        maxLength={128}
       />
       <Button type="submit" disabled={submitting} variant="submit" className="h-12 w-full rounded-2xl">
         {submitting ? <Spinner /> : localize('com_auth_continue')}

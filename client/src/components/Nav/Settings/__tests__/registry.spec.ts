@@ -17,6 +17,7 @@ const settingsContext: SettingsContextValue = {
   hasMultiConvo: false,
   hasPrompts: false,
   isLocalProvider: true,
+  isVectoreeProvider: false,
   twoFactorEnabled: false,
   allowAccountDeletion: true,
   aboutEnabled: false,

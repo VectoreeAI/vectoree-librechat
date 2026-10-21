@@ -4,6 +4,7 @@ import { logger } from '@librechat/data-schemas';
 import {
   Time,
   CacheKeys,
+  envVarRegex,
   KnownEndpoints,
   EModelEndpoint,
   defaultModels,
@@ -175,6 +176,11 @@ export async function fetchModels({
   }
 
   if (!apiKey) {
+    return models;
+  }
+  const unresolvedKey = envVarRegex.test(apiKey.trim());
+  const unresolvedBase = baseURL != null && envVarRegex.test(baseURL.trim());
+  if (unresolvedKey || unresolvedBase) {
     return models;
   }
 
