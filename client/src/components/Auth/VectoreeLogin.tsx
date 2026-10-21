@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button, SecretInput, Spinner, Input } from '@librechat/client';
 import type { FormEvent } from 'react';
 import type { VectoreeAppAuthResult } from '~/data-provider/Vectoree';
+import VectoreeWalletNotice from '~/components/Auth/VectoreeWalletNotice';
 import { submitVectoreeAppAuth } from '~/data-provider/Vectoree';
 import { ErrorMessage } from '~/components/Auth/ErrorMessage';
 import { useAuthContext, useLocalize } from '~/hooks';
@@ -31,6 +32,7 @@ export default function VectoreeLogin() {
   const [needsPassword, setNeedsPassword] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [walletBillingUrl, setWalletBillingUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -57,6 +59,15 @@ export default function VectoreeLogin() {
     setCode('');
     setMessage(null);
     setNotice(null);
+    setWalletBillingUrl(null);
+  }
+
+  function showWallet(result: VectoreeAppAuthResult): boolean {
+    if (!result.billingUrl) return false;
+    setWalletBillingUrl(result.billingUrl);
+    setMessage(null);
+    setNotice(null);
+    return true;
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -86,6 +97,7 @@ export default function VectoreeLogin() {
     setSubmitting(true);
     setMessage(null);
     setNotice(null);
+    setWalletBillingUrl(null);
     try {
       if (needsCode) {
         const verified = await submitVectoreeAppAuth({
@@ -93,6 +105,7 @@ export default function VectoreeLogin() {
           email: trimmedEmail,
           otp: code.trim(),
         });
+        if (showWallet(verified)) return;
         if (!verified.token && !verified.twoFAPending) {
           throw new Error(verified.message || localize('com_auth_vectoree_login_failed'));
         }
@@ -108,6 +121,7 @@ export default function VectoreeLogin() {
               ...(needsPassword ? { password } : {}),
             })
           : await submitVectoreeAppAuth({ action: 'login', email: trimmedEmail, password });
+      if (showWallet(started)) return;
       if (started.token || started.twoFAPending) {
         enterApp(started);
         return;
@@ -144,11 +158,13 @@ export default function VectoreeLogin() {
     setSubmitting(true);
     setMessage(null);
     setNotice(null);
+    setWalletBillingUrl(null);
     try {
       const resent = await submitVectoreeAppAuth({
         action: 'send-verification',
         email: trimmedEmail,
       });
+      if (showWallet(resent)) return;
       if (!resent.ok) {
         throw new Error(resent.message || localize('com_auth_email_resent_failed'));
       }
@@ -197,6 +213,7 @@ export default function VectoreeLogin() {
         </button>
       </div>
       <p className="mb-4 text-center text-sm text-text-secondary">{description}</p>
+      {walletBillingUrl ? <VectoreeWalletNotice href={walletBillingUrl} /> : null}
       {message ? <ErrorMessage>{message}</ErrorMessage> : null}
       {notice ? (
         <p className="mb-4 text-center text-sm text-text-primary" role="status">

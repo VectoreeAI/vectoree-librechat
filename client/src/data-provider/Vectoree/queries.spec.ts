@@ -1,4 +1,4 @@
-import { nextVectoreeGate } from './queries';
+import { isVectoreeDeploymentQuery, nextVectoreeGate, vectoreeLinkPollKey, vectoreeLinkStatusKey } from './queries';
 
 describe('nextVectoreeGate', () => {
   test('cloud mode opens the app from a preview and never the link page', () => {
@@ -12,5 +12,13 @@ describe('nextVectoreeGate', () => {
     expect(nextVectoreeGate({ linked: true, deployMode: 'local' }, false, false)).toBe('app');
     expect(nextVectoreeGate(undefined, false, true)).toBe('link');
     expect(nextVectoreeGate(undefined, false, false)).toBe('loading');
+  });
+});
+
+describe('isVectoreeDeploymentQuery', () => {
+  test('keeps the preview gate when a session refresh clears other queries', () => {
+    expect(isVectoreeDeploymentQuery(vectoreeLinkStatusKey)).toBe(true);
+    expect(isVectoreeDeploymentQuery(vectoreeLinkPollKey)).toBe(true);
+    expect(isVectoreeDeploymentQuery(['startupConfig'])).toBe(false);
   });
 });

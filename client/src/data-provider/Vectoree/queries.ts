@@ -20,6 +20,10 @@ function vectoreeUrl(path: string): string {
   return `${apiBaseUrl()}${path}`;
 }
 
+export function isVectoreeDeploymentQuery(queryKey: readonly unknown[]): boolean {
+  return queryKey[0] === vectoreeLinkStatusKey[0] || queryKey[0] === vectoreeLinkPollKey[0];
+}
+
 export function nextVectoreeGate(
   status: VectoreeLinkStatus | undefined,
   pendingTicket: boolean,
@@ -217,6 +221,8 @@ export type VectoreeAppAuthResult = {
   twoFAPending?: boolean;
   tempToken?: string;
   message?: string;
+  code?: string;
+  billingUrl?: string;
 };
 
 function readSessionUser(value: unknown): TUser | undefined {
@@ -272,7 +278,21 @@ export async function submitVectoreeAppAuth(input: {
     ...(record.twoFAPending === true ? { twoFAPending: true } : {}),
     ...(typeof record.tempToken === 'string' ? { tempToken: record.tempToken } : {}),
     ...(typeof record.message === 'string' ? { message: record.message } : {}),
+    ...readWalletBilling(record),
   };
+}
+
+function readWalletBilling(record: Record<string, unknown>): { code: string; billingUrl: string } | undefined {
+  if (record.code !== 'BILLING_WALLET_NOT_ACTIVATED' || typeof record.billingUrl !== 'string') {
+    return undefined;
+  }
+  try {
+    const url = new URL(record.billingUrl);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    return { code: 'BILLING_WALLET_NOT_ACTIVATED', billingUrl: record.billingUrl };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function submitVectoreePassword(input: {

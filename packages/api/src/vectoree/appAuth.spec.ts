@@ -458,4 +458,42 @@ describe('linkVectoreeUser', () => {
       body: { message: 'Confirm this email before signing in' },
     });
   });
+
+  test('points an inactive organization wallet at billing', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
+      return jsonResponse(
+        { code: 'BILLING_WALLET_NOT_ACTIVATED', message: 'Organization wallet is not activated' },
+        402,
+      );
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 402,
+      body: {
+        code: 'BILLING_WALLET_NOT_ACTIVATED',
+        message: 'Organization wallet is not activated',
+        billingUrl: `${API}/dashboard/organization/billing`,
+      },
+    });
+  });
+
+  test('keeps a wallet sentence on another status as a normal error', async () => {
+    const fetchImpl = jest.fn(async () =>
+      jsonResponse({ message: 'Organization wallet is not activated' }, 503),
+    );
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.submit({
+      action: 'login',
+      email: 'a@example.com',
+      password: 'secret12',
+    });
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 503,
+      body: { message: 'Organization wallet is not activated' },
+    });
+  });
 });
