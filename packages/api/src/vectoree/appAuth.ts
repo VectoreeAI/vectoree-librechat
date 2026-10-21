@@ -37,6 +37,8 @@ export type VectoreeAuthUser = {
 
 export type AppAuthClientBody = {
   message?: string;
+  code?: string;
+  billingUrl?: string;
   requireEmailVerification?: boolean;
   ok?: boolean;
   codeSent?: boolean;
@@ -186,6 +188,14 @@ export function createVectoreeAppAuth(options: {
           return response(502, { message: 'Could not reset password' });
         }
         return response(upstream.status, { resetToken });
+      }
+      if (isWalletInactive(upstream.status, payload)) {
+        const billingUrl = organizationBillingUrl(credentials.apiUrl);
+        return response(402, {
+          code: 'BILLING_WALLET_NOT_ACTIVATED',
+          message: 'Organization wallet is not activated',
+          ...(billingUrl ? { billingUrl } : {}),
+        });
       }
       return response(upstream.status || 502, {
         message: readErrorMessage(payload, 'Could not sign in'),
@@ -438,6 +448,26 @@ function actionBody(
   const passwordError = passwordLengthError(password);
   if (passwordError) return { error: passwordError };
   return { email: email ?? '', password };
+}
+
+function isWalletInactive(status: number, payload: unknown): boolean {
+  if (status !== 402) return false;
+  const record = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+  const code =
+    typeof record.code === 'string' ? record.code : typeof record.error === 'string' ? record.error : '';
+  if (code === 'BILLING_WALLET_NOT_ACTIVATED') return true;
+  return readErrorMessage(payload, '').toLowerCase().includes('wallet is not activated');
+}
+
+function organizationBillingUrl(apiUrl: string): string | null {
+  const trimmed = apiUrl.trim().replace(/\/$/, '');
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  } catch {
+    return null;
+  }
+  return `${trimmed}/dashboard/organization/billing`;
 }
 
 function passwordLengthError(password: string): string | null {

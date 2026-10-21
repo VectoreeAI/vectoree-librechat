@@ -3,6 +3,7 @@ import { Spinner, Button, SecretInput, Alert } from '@librechat/client';
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import type { FormEvent } from 'react';
 import type { TLoginLayoutContext } from '~/common';
+import VectoreeWalletNotice from '~/components/Auth/VectoreeWalletNotice';
 import { submitVectoreeAppAuth } from '~/data-provider/Vectoree';
 import { useLocalize } from '~/hooks';
 
@@ -16,6 +17,7 @@ function ResetPassword() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [message, setMessage] = useState<string | null>(linkError);
+  const [walletBillingUrl, setWalletBillingUrl] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const authInputClassName =
@@ -45,12 +47,17 @@ function ResetPassword() {
     }
     setSubmitting(true);
     setMessage(null);
+    setWalletBillingUrl(null);
     try {
       const reset = await submitVectoreeAppAuth({
         action: 'reset-password',
         password,
         otp: token,
       });
+      if (reset.billingUrl) {
+        setWalletBillingUrl(reset.billingUrl);
+        return;
+      }
       if (!reset.ok) {
         throw new Error(reset.message || localize('com_auth_vectoree_reset_failed'));
       }
@@ -78,6 +85,7 @@ function ResetPassword() {
 
   return (
     <form className="mt-6" aria-label="Password reset form" method="POST" onSubmit={onSubmit}>
+      {walletBillingUrl ? <VectoreeWalletNotice href={walletBillingUrl} /> : null}
       {message ? (
         <p role="alert" className="mb-4 text-sm text-text-destructive">
           {message}

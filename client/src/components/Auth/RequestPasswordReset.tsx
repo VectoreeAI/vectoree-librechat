@@ -4,6 +4,7 @@ import { loginPage } from 'librechat-data-provider';
 import { Spinner, Button, SecretInput, Alert } from '@librechat/client';
 import type { FormEvent, ReactNode } from 'react';
 import type { TLoginLayoutContext } from '~/common';
+import VectoreeWalletNotice from '~/components/Auth/VectoreeWalletNotice';
 import { submitVectoreeAppAuth } from '~/data-provider/Vectoree';
 import { useLocalize } from '~/hooks';
 
@@ -15,6 +16,7 @@ function RequestPasswordReset() {
   const [password, setPassword] = useState('');
   const [sent, setSent] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [walletBillingUrl, setWalletBillingUrl] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -27,8 +29,13 @@ function RequestPasswordReset() {
     }
     setSubmitting(true);
     setMessage(null);
+    setWalletBillingUrl(null);
     try {
       const result = await submitVectoreeAppAuth({ action: 'send-reset', email: trimmed });
+      if (result.billingUrl) {
+        setWalletBillingUrl(result.billingUrl);
+        return;
+      }
       if (!result.ok) {
         throw new Error(result.message || localize('com_auth_vectoree_reset_failed'));
       }
@@ -57,12 +64,17 @@ function RequestPasswordReset() {
     }
     setSubmitting(true);
     setMessage(null);
+    setWalletBillingUrl(null);
     try {
       const exchanged = await submitVectoreeAppAuth({
         action: 'exchange-reset',
         email: email.trim(),
         code: code.trim(),
       });
+      if (exchanged.billingUrl) {
+        setWalletBillingUrl(exchanged.billingUrl);
+        return;
+      }
       if (!exchanged.ok || !exchanged.resetToken) {
         throw new Error(exchanged.message || localize('com_auth_vectoree_reset_failed'));
       }
@@ -71,6 +83,10 @@ function RequestPasswordReset() {
         password,
         otp: exchanged.resetToken,
       });
+      if (reset.billingUrl) {
+        setWalletBillingUrl(reset.billingUrl);
+        return;
+      }
       if (!reset.ok) {
         throw new Error(reset.message || localize('com_auth_vectoree_reset_failed'));
       }
@@ -94,6 +110,7 @@ function RequestPasswordReset() {
   if (!sent) {
     return (
       <form className="mt-8 space-y-6" aria-label="Password reset form" method="POST" onSubmit={sendEmail}>
+        {walletBillingUrl ? <VectoreeWalletNotice href={walletBillingUrl} /> : null}
         {message ? <AlertMessage>{message}</AlertMessage> : null}
         <EmailField email={email} setEmail={setEmail} />
         <div className="space-y-4">
@@ -118,6 +135,7 @@ function RequestPasswordReset() {
         <p>{localize('com_auth_reset_password_if_email_exists')}</p>
         <p className="mt-3">{localize('com_auth_vectoree_reset_code_hint')}</p>
       </Alert>
+      {walletBillingUrl ? <VectoreeWalletNotice href={walletBillingUrl} /> : null}
       {message ? <AlertMessage>{message}</AlertMessage> : null}
       <label className="block text-sm text-text-secondary" htmlFor="reset-code">
         {localize('com_auth_vectoree_reset_code')}
