@@ -118,6 +118,9 @@ export type LinkVectoreeUserResult =
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OTP_PATTERN = /^\d{8}$/;
 const RESET_CODE_PATTERN = /^\d{6}$/;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_LENGTH = 128;
+const PASSWORD_LENGTH_MESSAGE = 'Use at least 8 characters';
 
 export function createVectoreeAppAuth(options: {
   credentials: () => VectoreeAppCredentials | null;
@@ -207,9 +210,8 @@ export function createVectoreeAppAuth(options: {
       const password = typeof input.password === 'string' ? input.password : '';
       const confirmPassword = typeof input.confirmPassword === 'string' ? input.confirmPassword : '';
       if (!email) return response(400, { message: 'Enter a valid email address' });
-      if (password.length < 8 || password.length > 128) {
-        return response(400, { message: 'Use at least 8 characters' });
-      }
+      const passwordError = passwordLengthError(password);
+      if (passwordError) return response(400, { message: passwordError });
       if (password !== confirmPassword) {
         return response(400, { message: 'Passwords do not match' });
       }
@@ -242,6 +244,8 @@ export function createVectoreeAppAuth(options: {
     if (typeof password !== 'string' || password.length === 0) {
       return response(200, { requirePassword: true });
     }
+    const passwordError = passwordLengthError(password);
+    if (passwordError) return response(400, { message: passwordError });
     const registered = await auth.submit({ action: 'register', email, password });
     if (registered.kind === 'response' && registered.status === 409) {
       return response(409, {
@@ -426,16 +430,21 @@ function actionBody(
     const otp = typeof input.otp === 'string' ? input.otp.trim() : '';
     const newPassword = typeof input.password === 'string' ? input.password : '';
     if (otp.length < 1 || otp.length > 512) return { error: 'Reset link is missing' };
-    if (newPassword.length < 6 || newPassword.length > 128) {
-      return { error: 'Password must be at least 6 characters' };
-    }
+    const resetError = passwordLengthError(newPassword);
+    if (resetError) return { error: resetError };
     return { newPassword, otp };
   }
   const password = typeof input.password === 'string' ? input.password : '';
-  if (password.length < 6 || password.length > 128) {
-    return { error: 'Password must be at least 6 characters' };
-  }
+  const passwordError = passwordLengthError(password);
+  if (passwordError) return { error: passwordError };
   return { email: email ?? '', password };
+}
+
+function passwordLengthError(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    return PASSWORD_LENGTH_MESSAGE;
+  }
+  return null;
 }
 
 function readRedirect(value: unknown): string | null {

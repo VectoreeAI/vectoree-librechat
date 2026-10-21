@@ -44,7 +44,7 @@ describe('vectoree app auth', () => {
     const outcome = await auth.submit({
       action: 'register',
       email: 'A@Example.com',
-      password: 'secret1',
+      password: 'secret12',
     });
     expect(outcome).toEqual({
       kind: 'response',
@@ -55,7 +55,7 @@ describe('vectoree app auth', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${API}/api/auth/users?client_type=server`);
     expect(init.headers).toMatchObject({ Authorization: `Bearer ${KEY}` });
-    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@example.com', password: 'secret1' });
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@example.com', password: 'secret12' });
     expect(url).not.toContain('/api/system/auth');
   });
 
@@ -65,7 +65,7 @@ describe('vectoree app auth', () => {
     const outcome = await auth.submit({
       action: 'register',
       email: 'a@example.com',
-      password: 'secret1',
+      password: 'secret12',
     });
     expect(outcome).toEqual({ kind: 'response', status: 409, body: { message: 'exists' } });
   });
@@ -78,7 +78,7 @@ describe('vectoree app auth', () => {
     const outcome = await auth.submit({
       action: 'login',
       email: 'a@example.com',
-      password: 'secret1',
+      password: 'secret12',
     });
     expect(outcome.kind).toBe('response');
     if (outcome.kind !== 'response') return;
@@ -128,7 +128,14 @@ describe('vectoree app auth', () => {
       body: { message: 'Enter the 8-digit code' },
     });
     expect(
-      await auth.submit({ action: 'login', email: 'a@example.com', password: 'secret1' }),
+      await auth.submit({ action: 'login', email: 'a@example.com', password: 'short' }),
+    ).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Use at least 8 characters' },
+    });
+    expect(
+      await auth.submit({ action: 'login', email: 'a@example.com', password: 'secret12' }),
     ).toEqual({
       kind: 'response',
       status: 400,
@@ -394,13 +401,34 @@ describe('linkVectoreeUser', () => {
       });
     });
     const auth = createVectoreeAppAuth({ credentials, fetchImpl });
-    const outcome = await auth.start('ada@example.com', 'secret1');
+    const outcome = await auth.start('ada@example.com', 'secret12');
     expect(outcome).toMatchObject({
       kind: 'session',
       user: { email: 'ada@example.com', emailVerified: false },
     });
     const [, init] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ email: 'ada@example.com', password: 'secret1' });
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'ada@example.com', password: 'secret12' });
+  });
+
+  test('rejects a short chosen password when email verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      throw new Error(`unexpected ${url}`);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const short = await auth.start('ada@example.com', 'secret1');
+    expect(short).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Use at least 8 characters' },
+    });
+    const long = await auth.start('ada@example.com', 'x'.repeat(129));
+    expect(long).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Use at least 8 characters' },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   test('sends an existing email to the password tab when verification is off', async () => {
@@ -409,7 +437,7 @@ describe('linkVectoreeUser', () => {
       return jsonResponse({ code: 'AUTH_EMAIL_EXISTS' }, 409);
     });
     const auth = createVectoreeAppAuth({ credentials, fetchImpl });
-    const outcome = await auth.start('ada@example.com', 'secret1');
+    const outcome = await auth.start('ada@example.com', 'secret12');
     expect(outcome).toMatchObject({ kind: 'response', status: 409, body: { usePassword: true } });
     expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes('send-verification'))).toBe(false);
   });

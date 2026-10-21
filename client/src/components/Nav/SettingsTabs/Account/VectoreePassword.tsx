@@ -20,6 +20,10 @@ export default function VectoreePassword() {
       setMessage(localize('com_auth_vectoree_password_min8'));
       return;
     }
+    if (password.length > 128) {
+      setMessage(localize('com_auth_password_max_length'));
+      return;
+    }
     if (password !== confirmPassword) {
       setMessage(localize('com_auth_vectoree_password_mismatch'));
       return;
@@ -76,6 +80,7 @@ export default function VectoreePassword() {
           autoComplete="new-password"
           value={password}
           minLength={8}
+          maxLength={128}
           onChange={(event) => setPassword(event.target.value)}
           required
         />
@@ -90,6 +95,7 @@ export default function VectoreePassword() {
           autoComplete="new-password"
           value={confirmPassword}
           minLength={8}
+          maxLength={128}
           onChange={(event) => setConfirmPassword(event.target.value)}
           required
         />

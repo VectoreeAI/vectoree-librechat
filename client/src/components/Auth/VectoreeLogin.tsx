@@ -70,8 +70,12 @@ export default function VectoreeLogin() {
       setMessage(localize('com_auth_vectoree_login_code_hint'));
       return;
     }
-    if (!needsCode && (method === 'password' || needsPassword) && password.length < 6) {
+    if (!needsCode && (method === 'password' || needsPassword) && password.length < 8) {
       setMessage(localize('com_auth_vectoree_password_min'));
+      return;
+    }
+    if (!needsCode && (method === 'password' || needsPassword) && password.length > 128) {
+      setMessage(localize('com_auth_password_max_length'));
       return;
     }
     if (needsPassword && password !== confirmPassword) {
@@ -242,7 +246,8 @@ export default function VectoreeLogin() {
                 controlsClassName="right-2"
                 buttonClassName={authSecretButtonClassName}
                 required
-                minLength={6}
+                minLength={8}
+                maxLength={128}
                 autoComplete={needsPassword ? 'new-password' : 'current-password'}
               />
             </div>
@@ -264,7 +269,8 @@ export default function VectoreeLogin() {
                 controlsClassName="right-2"
                 buttonClassName={authSecretButtonClassName}
                 required
-                minLength={6}
+                minLength={8}
+                maxLength={128}
               />
             </div>
           </div>

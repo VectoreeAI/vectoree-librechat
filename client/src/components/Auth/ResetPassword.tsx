@@ -31,8 +31,12 @@ function ResetPassword() {
       setMessage(localize('com_auth_vectoree_reset_missing'));
       return;
     }
-    if (password.length < 6) {
+    if (password.length < 8) {
       setMessage(localize('com_auth_vectoree_password_min'));
+      return;
+    }
+    if (password.length > 128) {
+      setMessage(localize('com_auth_password_max_length'));
       return;
     }
     if (password !== confirm) {
@@ -93,6 +97,8 @@ function ResetPassword() {
           labelClassName={authLabelClassName}
           controlsClassName="right-2"
           buttonClassName={authSecretButtonClassName}
+          minLength={8}
+          maxLength={128}
         />
       </div>
       <div className="mb-2">
@@ -104,6 +110,8 @@ function ResetPassword() {
           className={authInputClassName}
           placeholder=" "
           label={localize('com_auth_password_confirm')}
+          minLength={8}
+          maxLength={128}
           labelClassName={authLabelClassName}
           controlsClassName="right-2"
           buttonClassName={authSecretButtonClassName}
