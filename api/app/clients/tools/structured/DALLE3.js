@@ -9,9 +9,18 @@ const {
   extractBaseURL,
   getProxyDispatcher,
   getEnvProxyDispatcher,
+  currentVectoreeApiKey,
   createMinimalRetentionRequest,
 } = require('@librechat/api');
 const { FileContext, ContentTypes } = require('librechat-data-provider');
+
+function vectoreeApiKey() {
+  if (typeof currentVectoreeApiKey === 'function') {
+    const preview = currentVectoreeApiKey();
+    if (preview !== undefined) return preview;
+  }
+  return process.env.VECTOREE_API_KEY ?? '';
+}
 
 const dalle3JsonSchema = {
   type: 'object',
@@ -70,8 +79,16 @@ class DALLE3 extends Tool {
 
     let apiKey = fields.DALLE3_API_KEY ?? fields.DALLE_API_KEY ?? this.getApiKey();
     const config = { apiKey };
-    if (process.env.DALLE_REVERSE_PROXY) {
+    const dedicatedDalle = Boolean(process.env.DALLE3_API_KEY || process.env.DALLE_API_KEY);
+    const reverseProxy = Boolean(process.env.DALLE_REVERSE_PROXY);
+    this.imageModel = dedicatedDalle
+      ? 'dall-e-3'
+      : process.env.VECTOREE_IMAGE_MODEL || 'bytedance-seed/seedream-5-0-pro';
+    this.vectoreeImage = !dedicatedDalle && !reverseProxy && Boolean(vectoreeApiKey());
+    if (reverseProxy) {
       config.baseURL = extractBaseURL(process.env.DALLE_REVERSE_PROXY);
+    } else if (this.vectoreeImage && process.env.VECTOREE_API_BASE) {
+      config.baseURL = process.env.VECTOREE_API_BASE.replace(/\/$/, '');
     }
 
     if (process.env.DALLE3_AZURE_API_VERSION && process.env.DALLE3_BASEURL) {
@@ -121,7 +138,15 @@ class DALLE3 extends Tool {
   }
 
   getApiKey() {
-    const apiKey = process.env.DALLE3_API_KEY ?? process.env.DALLE_API_KEY ?? '';
+    const dedicated = process.env.DALLE3_API_KEY ?? process.env.DALLE_API_KEY ?? '';
+    if (dedicated) return dedicated;
+    if (process.env.DALLE_REVERSE_PROXY) {
+      if (!this.override) {
+        throw new Error('Missing DALLE_API_KEY environment variable.');
+      }
+      return '';
+    }
+    const apiKey = vectoreeApiKey();
     if (!apiKey && !this.override) {
       throw new Error('Missing DALLE_API_KEY environment variable.');
     }
@@ -155,16 +180,24 @@ class DALLE3 extends Tool {
       throw new Error('Missing required field: prompt');
     }
 
+    const request = this.vectoreeImage
+      ? {
+          model: this.imageModel,
+          prompt: this.replaceUnwantedChars(prompt),
+          n: 1,
+          size,
+        }
+      : {
+          model: 'dall-e-3',
+          quality,
+          style,
+          size,
+          prompt: this.replaceUnwantedChars(prompt),
+          n: 1,
+        };
     let resp;
     try {
-      resp = await this.openai.images.generate({
-        model: 'dall-e-3',
-        quality,
-        style,
-        size,
-        prompt: this.replaceUnwantedChars(prompt),
-        n: 1,
-      });
+      resp = await this.openai.images.generate(request);
     } catch (error) {
       logger.error('[DALL-E-3] Problem generating the image:', error);
       return this
@@ -178,7 +211,12 @@ Error Message: ${error.message}`);
       );
     }
 
-    const theImageUrl = resp.data[0].url;
+    const image = resp.data[0];
+    const theImageUrl = image.url
+      ? image.url
+      : image.b64_json
+        ? `data:image/png;base64,${image.b64_json}`
+        : '';
 
     if (!theImageUrl) {
       return this.returnValue(
@@ -187,19 +225,23 @@ Error Message: ${error.message}`);
     }
 
     if (this.isAgent) {
-      let fetchOptions = {};
-      const dispatcher = getEnvProxyDispatcher();
-      if (dispatcher) {
-        fetchOptions.dispatcher = dispatcher;
+      let dataUrl = theImageUrl;
+      if (!theImageUrl.startsWith('data:')) {
+        let fetchOptions = {};
+        const dispatcher = getEnvProxyDispatcher();
+        if (dispatcher) {
+          fetchOptions.dispatcher = dispatcher;
+        }
+        const imageResponse = await fetch(theImageUrl, fetchOptions);
+        const arrayBuffer = await imageResponse.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString('base64');
+        dataUrl = `data:image/png;base64,${base64}`;
       }
-      const imageResponse = await fetch(theImageUrl, fetchOptions);
-      const arrayBuffer = await imageResponse.arrayBuffer();
-      const base64 = Buffer.from(arrayBuffer).toString('base64');
       const content = [
         {
           type: ContentTypes.IMAGE_URL,
           image_url: {
-            url: `data:image/png;base64,${base64}`,
+            url: dataUrl,
           },
         },
       ];

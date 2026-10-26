@@ -3,9 +3,16 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { MutationKeys, QueryKeys, dataService, request } from 'librechat-data-provider';
 import type { UseMutationOptions, UseMutationResult } from '@tanstack/react-query';
 import type * as t from 'librechat-data-provider';
+import { isVectoreeDeploymentQuery } from '../Vectoree/queries';
 import useClearStates from '~/hooks/Config/useClearStates';
 import { clearAllConversationStorage } from '~/utils';
 import store from '~/store';
+
+function removeSessionQueries(queryClient: ReturnType<typeof useQueryClient>): void {
+  queryClient.removeQueries({
+    predicate: (query) => !isVectoreeDeploymentQuery(query.queryKey),
+  });
+}
 
 /* login/logout */
 export const useLogoutUserMutation = (
@@ -23,7 +30,7 @@ export const useLogoutUserMutation = (
       setQueriesEnabled(false);
       resetDefaultPreset();
       clearStates();
-      queryClient.removeQueries();
+      removeSessionQueries(queryClient);
       options?.onSuccess?.(...args);
     },
   });
@@ -43,7 +50,7 @@ export const useLoginUserMutation = (
       setQueriesEnabled(false);
       resetDefaultPreset();
       clearStates();
-      queryClient.removeQueries();
+      removeSessionQueries(queryClient);
       options?.onMutate?.(vars);
     },
     // Queries re-enabled in setUserContext (AuthContext) after setTokenHeader runs
@@ -65,7 +72,7 @@ export const useRefreshTokenMutation = (
     mutationFn: () => request.refreshToken(),
     ...(options || {}),
     onMutate: (vars) => {
-      queryClient.removeQueries();
+      removeSessionQueries(queryClient);
       options?.onMutate?.(vars);
     },
   });
@@ -86,7 +93,7 @@ export const useDeleteUserMutation = (
       resetDefaultPreset();
       clearStates();
       clearAllConversationStorage();
-      queryClient.removeQueries();
+      removeSessionQueries(queryClient);
       options?.onSuccess?.(...args);
     },
   });

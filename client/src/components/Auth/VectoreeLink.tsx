@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { Button, Input, Spinner } from '@librechat/client';
 import type { ChangeEvent, FormEvent } from 'react';
 import type { VectoreeConnectSnapshot, VectoreeLinkStatus } from '~/data-provider/Vectoree';
@@ -118,6 +118,10 @@ export default function VectoreeLink() {
       return;
     }
     setPhase('pending');
+  }
+
+  if (!linkStatus.isLoading && linkStatus.data?.deployMode === 'cloud') {
+    return <Navigate to={linkStatus.data.previewed ? '/login' : '/preview-expired'} replace />;
   }
 
   const showForm = phase === 'form' || phase === 'error';

@@ -22,6 +22,7 @@ import LangfuseConnection from '../SettingsTabs/Integrations/LangfuseConnection'
 import ClockFormatSelector from '../SettingsTabs/General/ClockFormatSelector';
 import ImportConversations from '../SettingsTabs/Data/ImportConversations';
 import WeekStartSelector from '../SettingsTabs/General/WeekStartSelector';
+import VectoreePassword from '../SettingsTabs/Account/VectoreePassword';
 import { ArchiveAllChats } from '../SettingsTabs/Data/ArchiveAllChats';
 import { toggleControl, ThemeSetting, LangSetting } from './controls';
 import BackupCodesItem from '../SettingsTabs/Account/BackupCodesItem';
@@ -710,6 +711,14 @@ export const registry: SettingEntry[] = [
     Component: Avatar,
   },
   // Account · Security
+  {
+    id: 'vectoreePassword',
+    tab: ACCOUNT,
+    section: 'security',
+    labelKey: 'com_ui_settings_label_vectoree_password',
+    show: (ctx) => ctx.isVectoreeProvider,
+    Component: VectoreePassword,
+  },
   {
     id: 'twoFactor',
     tab: ACCOUNT,

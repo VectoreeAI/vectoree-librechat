@@ -1,27 +1,181 @@
-import { useState, ReactNode } from 'react';
-import { useForm } from 'react-hook-form';
+import { useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { loginPage } from 'librechat-data-provider';
-import { Spinner, Button, Alert, Input } from '@librechat/client';
-import { useRequestPasswordResetMutation } from 'librechat-data-provider/react-query';
-import type { TRequestPasswordReset, TRequestPasswordResetResponse } from 'librechat-data-provider';
-import type { FC } from 'react';
+import { Spinner, Button, SecretInput, Alert } from '@librechat/client';
+import type { FormEvent, ReactNode } from 'react';
 import type { TLoginLayoutContext } from '~/common';
+import VectoreeWalletNotice from '~/components/Auth/VectoreeWalletNotice';
+import { submitVectoreeAppAuth } from '~/data-provider/Vectoree';
 import { useLocalize } from '~/hooks';
 
-const BodyTextWrapper: FC<{ children: ReactNode }> = ({ children }) => {
-  return (
-    <Alert variant="success" icon={false} className="mt-6 px-6 py-4 shadow-sm transition-all">
-      {children}
-    </Alert>
-  );
-};
+function RequestPasswordReset() {
+  const localize = useLocalize();
+  const { setHeaderText } = useOutletContext<TLoginLayoutContext>();
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [sent, setSent] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [walletBillingUrl, setWalletBillingUrl] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-const ResetPasswordBodyText = () => {
+  async function sendEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setMessage(localize('com_auth_email_required'));
+      return;
+    }
+    setSubmitting(true);
+    setMessage(null);
+    setWalletBillingUrl(null);
+    try {
+      const result = await submitVectoreeAppAuth({ action: 'send-reset', email: trimmed });
+      if (result.billingUrl) {
+        setWalletBillingUrl(result.billingUrl);
+        return;
+      }
+      if (!result.ok) {
+        throw new Error(result.message || localize('com_auth_vectoree_reset_failed'));
+      }
+      setHeaderText('com_auth_reset_password_link_sent');
+      setSent(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : localize('com_auth_vectoree_reset_failed'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!/^\d{6}$/.test(code.trim())) {
+      setMessage(localize('com_auth_vectoree_reset_code_hint'));
+      return;
+    }
+    if (password.length < 8) {
+      setMessage(localize('com_auth_vectoree_password_min'));
+      return;
+    }
+    if (password.length > 128) {
+      setMessage(localize('com_auth_password_max_length'));
+      return;
+    }
+    setSubmitting(true);
+    setMessage(null);
+    setWalletBillingUrl(null);
+    try {
+      const exchanged = await submitVectoreeAppAuth({
+        action: 'exchange-reset',
+        email: email.trim(),
+        code: code.trim(),
+      });
+      if (exchanged.billingUrl) {
+        setWalletBillingUrl(exchanged.billingUrl);
+        return;
+      }
+      if (!exchanged.ok || !exchanged.resetToken) {
+        throw new Error(exchanged.message || localize('com_auth_vectoree_reset_failed'));
+      }
+      const reset = await submitVectoreeAppAuth({
+        action: 'reset-password',
+        password,
+        otp: exchanged.resetToken,
+      });
+      if (reset.billingUrl) {
+        setWalletBillingUrl(reset.billingUrl);
+        return;
+      }
+      if (!reset.ok) {
+        throw new Error(reset.message || localize('com_auth_vectoree_reset_failed'));
+      }
+      setHeaderText('com_auth_reset_password_success');
+      setDone(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : localize('com_auth_vectoree_reset_failed'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <Alert variant="success" icon={false} className="mt-6 px-6 py-4 shadow-sm transition-all">
+        <Done />
+      </Alert>
+    );
+  }
+
+  if (!sent) {
+    return (
+      <form className="mt-8 space-y-6" aria-label="Password reset form" method="POST" onSubmit={sendEmail}>
+        {walletBillingUrl ? <VectoreeWalletNotice href={walletBillingUrl} /> : null}
+        {message ? <AlertMessage>{message}</AlertMessage> : null}
+        <EmailField email={email} setEmail={setEmail} />
+        <div className="space-y-4">
+          <Button
+            aria-label="Continue with password reset"
+            type="submit"
+            disabled={submitting}
+            variant="submit"
+            className="h-12 w-full rounded-2xl"
+          >
+            {submitting ? <Spinner /> : localize('com_auth_continue')}
+          </Button>
+          <BackToLogin />
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <form className="mt-8 space-y-6" aria-label="Password reset code form" method="POST" onSubmit={submitCode}>
+      <Alert variant="success" icon={false} className="px-6 py-4 shadow-sm transition-all">
+        <p>{localize('com_auth_reset_password_if_email_exists')}</p>
+        <p className="mt-3">{localize('com_auth_vectoree_reset_code_hint')}</p>
+      </Alert>
+      {walletBillingUrl ? <VectoreeWalletNotice href={walletBillingUrl} /> : null}
+      {message ? <AlertMessage>{message}</AlertMessage> : null}
+      <label className="block text-sm text-text-secondary" htmlFor="reset-code">
+        {localize('com_auth_vectoree_reset_code')}
+        <input
+          id="reset-code"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          className="webkit-dark-styles mt-2 h-12 w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 text-text-primary focus:border-accent-primary focus:outline-none"
+        />
+      </label>
+      <SecretInput
+        id="password"
+        autoComplete="new-password"
+        aria-label={localize('com_auth_password')}
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        className="webkit-dark-styles h-12 w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 pr-12 text-text-primary focus:border-accent-primary focus:outline-none"
+        placeholder=" "
+        label={localize('com_auth_password')}
+        labelClassName="absolute start-3 top-1.5 z-10 origin-[0] -translate-y-4 scale-75 transform bg-surface-primary px-2 text-sm text-text-secondary-alt"
+        controlsClassName="right-2"
+        buttonClassName="size-9 rounded-xl text-text-secondary-alt hover:bg-transparent hover:text-text-primary"
+        minLength={8}
+        maxLength={128}
+      />
+      <Button type="submit" disabled={submitting} variant="submit" className="h-12 w-full rounded-2xl">
+        {submitting ? <Spinner /> : localize('com_auth_continue')}
+      </Button>
+      <BackToLogin />
+    </form>
+  );
+}
+
+function Done() {
   const localize = useLocalize();
   return (
     <div className="flex flex-col space-y-4">
-      <p>{localize('com_auth_reset_password_if_email_exists')}</p>
+      <p>{localize('com_auth_login_with_new_password')}</p>
       <a
         className="inline-flex text-sm font-medium text-accent-primary transition-colors hover:text-accent-primary-hover"
         href={loginPage()}
@@ -30,115 +184,49 @@ const ResetPasswordBodyText = () => {
       </a>
     </div>
   );
-};
+}
 
-function RequestPasswordReset() {
+function BackToLogin() {
   const localize = useLocalize();
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<TRequestPasswordReset>();
-  const [bodyText, setBodyText] = useState<ReactNode | undefined>(undefined);
-  const { startupConfig, setHeaderText } = useOutletContext<TLoginLayoutContext>();
-
-  const requestPasswordReset = useRequestPasswordResetMutation();
-  const { isLoading } = requestPasswordReset;
-
-  const onSubmit = (data: TRequestPasswordReset) => {
-    requestPasswordReset.mutate(data, {
-      onSuccess: (data: TRequestPasswordResetResponse) => {
-        if (data.link && !startupConfig?.emailEnabled) {
-          setHeaderText('com_auth_reset_password');
-          setBodyText(
-            <span>
-              {localize('com_auth_click')}{' '}
-              <a className="text-accent-primary hover:underline" href={data.link}>
-                {localize('com_auth_here')}
-              </a>{' '}
-              {localize('com_auth_to_reset_your_password')}
-            </span>,
-          );
-        } else {
-          setHeaderText('com_auth_reset_password_link_sent');
-          setBodyText(<ResetPasswordBodyText />);
-        }
-      },
-      onError: () => {
-        setHeaderText('com_auth_reset_password_link_sent');
-        setBodyText(<ResetPasswordBodyText />);
-      },
-    });
-  };
-
-  if (bodyText) {
-    return <BodyTextWrapper>{bodyText}</BodyTextWrapper>;
-  }
-
   return (
-    <form
-      className="mt-8 space-y-6"
-      aria-label="Password reset form"
-      method="POST"
-      onSubmit={handleSubmit(onSubmit)}
+    <a
+      href={loginPage()}
+      className="block text-center text-sm font-medium text-accent-primary transition-colors hover:text-accent-primary-hover"
     >
-      <div className="space-y-2">
-        <div className="relative">
-          <Input
-            type="email"
-            id="email"
-            autoComplete="off"
-            aria-label={localize('com_auth_email')}
-            {...register('email', {
-              required: localize('com_auth_email_required'),
-              minLength: {
-                value: 3,
-                message: localize('com_auth_email_min_length'),
-              },
-              maxLength: {
-                value: 120,
-                message: localize('com_auth_email_max_length'),
-              },
-              pattern: {
-                value: /\S+@\S+\.\S+/,
-                message: localize('com_auth_email_pattern'),
-              },
-            })}
-            aria-invalid={!!errors.email}
-            className="webkit-dark-styles transition-color peer h-auto w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 pb-2.5 pt-3 text-text-primary duration-200 focus:border-accent-primary focus:outline-none"
-            placeholder=" "
-          />
-          <label
-            htmlFor="email"
-            className="absolute -top-2 left-2 z-10 bg-surface-primary px-2 text-sm text-text-secondary transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-base peer-placeholder-shown:text-text-tertiary peer-focus:-top-2 peer-focus:text-sm peer-focus:text-accent-primary"
-          >
-            {localize('com_auth_email_address')}
-          </label>
-        </div>
-        {errors.email && (
-          <p role="alert" className="text-sm font-medium text-text-destructive">
-            {errors.email.message}
-          </p>
-        )}
-      </div>
-      <div className="space-y-4">
-        <Button
-          aria-label="Continue with password reset"
-          type="submit"
-          disabled={!!errors.email || isLoading}
-          variant="submit"
-          className="h-12 w-full rounded-2xl"
-        >
-          {isLoading ? <Spinner /> : localize('com_auth_continue')}
-        </Button>
-        <a
-          href={loginPage()}
-          className="block text-center text-sm font-medium text-accent-primary transition-colors hover:text-accent-primary-hover"
-        >
-          {localize('com_auth_back_to_login')}
-        </a>
-      </div>
-    </form>
+      {localize('com_auth_back_to_login')}
+    </a>
+  );
+}
+
+function EmailField({ email, setEmail }: { email: string; setEmail: (value: string) => void }) {
+  const localize = useLocalize();
+  return (
+    <div className="relative">
+      <input
+        type="email"
+        id="email"
+        autoComplete="email"
+        aria-label={localize('com_auth_email')}
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        className="webkit-dark-styles peer h-auto w-full rounded-2xl border border-border-light bg-surface-primary px-3.5 pb-2.5 pt-3 text-text-primary focus:border-accent-primary focus:outline-none"
+        placeholder=" "
+      />
+      <label
+        htmlFor="email"
+        className="absolute -top-2 left-2 z-10 bg-surface-primary px-2 text-sm text-text-secondary"
+      >
+        {localize('com_auth_email_address')}
+      </label>
+    </div>
+  );
+}
+
+function AlertMessage({ children }: { children: ReactNode }) {
+  return (
+    <p role="alert" className="text-sm font-medium text-text-destructive">
+      {children}
+    </p>
   );
 }
 

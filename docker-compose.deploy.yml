@@ -1,0 +1,79 @@
+# 服务器上拉镜像启动，不在机器上构建。
+#   docker compose -f docker-compose.deploy.yml up -d
+#
+# Mongo 使用 .env 里的 MONGO_ROOT_USER / MONGO_ROOT_PASSWORD（deploy-remote.sh 会生成）。
+# MONGO_INITDB_* 只在空数据卷首次初始化时建 root 用户。
+# 若服务器上仍是旧的 --noauth 数据卷，需重建 mongo 卷后再部署，或手工创建同名用户。
+
+name: vectoree-librechat
+
+services:
+  api:
+    image: ${LIBRECHAT_IMAGE:?set LIBRECHAT_IMAGE}
+    container_name: vectoree-librechat-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3080"
+      NODE_ENV: production
+      MONGO_URI: ${MONGO_URI:?set MONGO_URI}
+      VECTOREE_API_URL: ${VECTOREE_API_URL:-https://vectoree.ai}
+      DEPLOY_MODE: ${DEPLOY_MODE:-cloud}
+    ports:
+      - "127.0.0.1:${LIBRECHAT_PORT:-5175}:3080"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./librechat.example.yaml:/app/librechat.yaml:ro
+      - librechat-data:/app/data
+      - librechat-uploads:/app/uploads
+      - librechat-images:/app/client/public/images
+      - librechat-logs:/app/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    security_opt:
+      - no-new-privileges:true
+
+  mongodb:
+    image: mongo:8.0.20
+    container_name: vectoree-librechat-mongodb
+    restart: unless-stopped
+    # No env_file here: Mongo needs only MONGO_INITDB_* below. Loading .env would
+    # put JWT_SECRET, CREDS_KEY/IV and the credentialed MONGO_URI into this container.
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-librechat}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: LibreChat
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  mongo-data:
+  librechat-data:
+  librechat-uploads:
+  librechat-images:
+  librechat-logs:

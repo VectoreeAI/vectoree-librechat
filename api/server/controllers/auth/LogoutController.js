@@ -1,5 +1,13 @@
 const cookies = require('cookie');
-const { isEnabled, math, clearCloudFrontCookies } = require('@librechat/api');
+const {
+  isEnabled,
+  math,
+  clearCloudFrontCookies,
+  configuredPublicOrigin,
+  dropPreviewSession,
+  publicCookiePath,
+  PREVIEW_COOKIE,
+} = require('@librechat/api');
 const { logger, DEFAULT_REFRESH_TOKEN_EXPIRY } = require('@librechat/data-schemas');
 const { logoutUser } = require('~/server/services/AuthService');
 const { deleteAllRefreshTokenBridges } = require('~/server/services/RefreshTokenBridge');
@@ -88,6 +96,19 @@ const logoutController = async (req, res) => {
     res.clearCookie('openid_id_token');
     res.clearCookie('openid_user_id');
     res.clearCookie('token_provider');
+    if (typeof dropPreviewSession === 'function' && typeof publicCookiePath === 'function') {
+      dropPreviewSession(req.headers.cookie);
+      const secure =
+        req.secure === true ||
+        Boolean(configuredPublicOrigin(process.env)) ||
+        process.env.NODE_ENV === 'production';
+      res.clearCookie(PREVIEW_COOKIE, {
+        path: publicCookiePath(process.env),
+        httpOnly: true,
+        sameSite: 'lax',
+        secure,
+      });
+    }
     clearCloudFrontCookies(res, {
       userId: req.user?.id ?? req.user?._id?.toString?.(),
       tenantId: req.user?.tenantId,

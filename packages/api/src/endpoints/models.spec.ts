@@ -95,6 +95,20 @@ describe('fetchModels', () => {
     );
   });
 
+  it('skips the network when the api key is missing or still a placeholder', async () => {
+    mockedAxios.get.mockClear();
+    await expect(
+      fetchModels({
+        apiKey: undefined as unknown as string,
+        baseURL: 'https://api.test.com',
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      fetchModels({ apiKey: '${XAI_API_KEY}', baseURL: 'https://api.test.com' }),
+    ).resolves.toEqual([]);
+    expect(mockedAxios.get).not.toHaveBeenCalled();
+  });
+
   it('adds the user ID to the models query when option and ID are passed', async () => {
     const models = await fetchModels({
       user: 'user123',

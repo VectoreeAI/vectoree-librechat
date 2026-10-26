@@ -1,4 +1,4 @@
-import { extractEnvVariable, isSensitiveEnvVar } from '../src/utils';
+import { extractEnvVariable, isSensitiveEnvVar, setRuntimeEnvReader } from '../src/utils';
 
 describe('Environment Variable Extraction', () => {
   const originalEnv = process.env;
@@ -16,6 +16,14 @@ describe('Environment Variable Extraction', () => {
   });
 
   describe('extractEnvVariable (original tests)', () => {
+    test('keeps an empty runtime value instead of the process environment', () => {
+      process.env.TEST_VAR = 'from-env';
+      setRuntimeEnvReader((name) => (name === 'TEST_VAR' ? '' : undefined));
+      expect(extractEnvVariable('${TEST_VAR}')).toBe('');
+      setRuntimeEnvReader(undefined);
+      expect(extractEnvVariable('${TEST_VAR}')).toBe('from-env');
+    });
+
     test('should return the value of the environment variable', () => {
       process.env.TEST_VAR = 'test_value';
       expect(extractEnvVariable('${TEST_VAR}')).toBe('test_value');

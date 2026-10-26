@@ -1,7 +1,32 @@
-export { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
+export { createVectoreeAppAuth, linkVectoreeUser, previewIssuer, toVectoreeLinkedUser } from './appAuth';
 export { VectoreeConfigError } from './errors';
-export { createVectoreeLink } from './link';
-export { prepareVectoreeStartup } from './store';
+export {
+  assertCloudPreview,
+  bindPreviewOwner,
+  bindRequestPreview,
+  confirmCloudPreview,
+  currentVectoreeApiKey,
+  declineCloudPreview,
+  dropPreviewSession,
+  installCloudPreviewEnv,
+  PREVIEW_COOKIE,
+  PREVIEW_SWITCH_COOKIE,
+  previewActive,
+  publicCookiePath,
+  redeemCloudPreview,
+} from './preview';
+export { createVectoreeLink, publicDeploymentStatus, readVectoreeAppCredentials } from './link';
+export { readDeployMode, usesProjectLink } from './mode';
+export { configuredPublicOrigin } from './url';
+export { createVectoreeChatBridge } from './chatBridge';
+export { createVectoreeChats } from './chats';
+export {
+  applyGenerationDefaults,
+  prepareVectoreeStartup,
+  VECTOREE_IMAGE_MODEL_DEFAULT,
+  VECTOREE_SPEECH_MODEL_DEFAULT,
+  VECTOREE_SPEECH_VOICE_DEFAULT,
+} from './store';
 export type {
   AppAuthOutcome,
   AppAuthSubmitInput,

@@ -1,5 +1,5 @@
 import type { VectoreeLinkedUser } from './appAuth';
-import { createVectoreeAppAuth, linkVectoreeUser, toVectoreeLinkedUser } from './appAuth';
+import { createVectoreeAppAuth, linkVectoreeUser, previewIssuer, toVectoreeLinkedUser } from './appAuth';
 
 const API = 'https://vectoree.ai';
 const KEY = 'sk-ve-v1-test-key';
@@ -16,7 +16,26 @@ function credentials() {
   return { apiUrl: API, apiKey: KEY };
 }
 
+function methodsBody(requireEmailVerification: boolean) {
+  return {
+    email: true,
+    codeLength: 8,
+    verifyEmailMethod: 'code',
+    requireEmailVerification,
+    oauth: [],
+  };
+}
+
 describe('vectoree app auth', () => {
+  test('cloud identities include the project so user ids cannot collide', () => {
+    const projectId = '11111111-2222-4333-8444-555555555555';
+    expect(previewIssuer({ DEPLOY_MODE: 'cloud' }, { apiUrl: API, apiKey: KEY, projectId })).toBe(
+      `${API}/projects/${projectId}`,
+    );
+    expect(previewIssuer({ DEPLOY_MODE: 'local' }, { apiUrl: API, apiKey: KEY, projectId })).toBe(API);
+    expect(previewIssuer({}, { apiUrl: API, apiKey: KEY })).toBe(API);
+  });
+
   test('register that still needs a code does not send a second email', async () => {
     const fetchImpl = jest.fn(async () =>
       jsonResponse({ requireEmailVerification: true, user: { id: 'u1', email: 'a@example.com' } }),
@@ -25,7 +44,7 @@ describe('vectoree app auth', () => {
     const outcome = await auth.submit({
       action: 'register',
       email: 'A@Example.com',
-      password: 'secret1',
+      password: 'secret12',
     });
     expect(outcome).toEqual({
       kind: 'response',
@@ -33,10 +52,10 @@ describe('vectoree app auth', () => {
       body: { requireEmailVerification: true },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${API}/api/auth/users?client_type=server`);
     expect(init.headers).toMatchObject({ Authorization: `Bearer ${KEY}` });
-    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@example.com', password: 'secret1' });
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'a@example.com', password: 'secret12' });
     expect(url).not.toContain('/api/system/auth');
   });
 
@@ -46,7 +65,7 @@ describe('vectoree app auth', () => {
     const outcome = await auth.submit({
       action: 'register',
       email: 'a@example.com',
-      password: 'secret1',
+      password: 'secret12',
     });
     expect(outcome).toEqual({ kind: 'response', status: 409, body: { message: 'exists' } });
   });
@@ -59,7 +78,7 @@ describe('vectoree app auth', () => {
     const outcome = await auth.submit({
       action: 'login',
       email: 'a@example.com',
-      password: 'secret1',
+      password: 'secret12',
     });
     expect(outcome.kind).toBe('response');
     if (outcome.kind !== 'response') return;
@@ -94,7 +113,7 @@ describe('vectoree app auth', () => {
     });
     expect(JSON.stringify(outcome)).not.toContain('app-user-jwt');
     expect(JSON.stringify(outcome)).not.toContain(KEY);
-    expect(JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({
+    expect(JSON.parse(String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({
       email: 'a@example.com',
       otp: '12345678',
     });
@@ -109,11 +128,77 @@ describe('vectoree app auth', () => {
       body: { message: 'Enter the 8-digit code' },
     });
     expect(
-      await auth.submit({ action: 'login', email: 'a@example.com', password: 'secret1' }),
+      await auth.submit({ action: 'login', email: 'a@example.com', password: 'short' }),
+    ).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Use at least 8 characters' },
+    });
+    expect(
+      await auth.submit({ action: 'login', email: 'a@example.com', password: 'secret12' }),
     ).toEqual({
       kind: 'response',
       status: 400,
       body: { message: 'Vectoree is not connected' },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test('sends a reset email and exchanges a 6-digit code without starting a session', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('exchange-reset-password-token')) {
+        return jsonResponse({ token: 'reset-token', expiresAt: '2026-01-01T00:00:00.000Z' });
+      }
+      if (String(url).includes('/email/reset-password')) {
+        return jsonResponse({ message: 'Password updated' });
+      }
+      return jsonResponse({ success: true, message: 'sent' }, 202);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const sent = await auth.submit({
+      action: 'send-reset',
+      email: 'A@Example.com',
+      redirectTo: 'https://chat.example/reset-password',
+    });
+    expect(sent).toEqual({ kind: 'response', status: 202, body: { ok: true } });
+    const exchanged = await auth.submit({
+      action: 'exchange-reset',
+      email: 'a@example.com',
+      code: '123456',
+    });
+    expect(exchanged).toEqual({
+      kind: 'response',
+      status: 200,
+      body: { resetToken: 'reset-token' },
+    });
+    const reset = await auth.submit({
+      action: 'reset-password',
+      password: 'new-secret',
+      otp: 'reset-token',
+    });
+    expect(reset).toEqual({ kind: 'response', status: 200, body: { ok: true } });
+    const bodies = fetchImpl.mock.calls.map((call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)));
+    expect(bodies[0]).toEqual({
+      email: 'a@example.com',
+      redirectTo: 'https://chat.example/reset-password',
+    });
+    expect(bodies[1]).toEqual({ email: 'a@example.com', code: '123456' });
+    expect(bodies[2]).toEqual({ newPassword: 'new-secret', otp: 'reset-token' });
+  });
+
+  test('rejects an http reset link before calling Vectoree', async () => {
+    const fetchImpl = jest.fn();
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    expect(
+      await auth.submit({
+        action: 'send-reset',
+        email: 'a@example.com',
+        redirectTo: 'http://evil.example/reset-password',
+      }),
+    ).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Reset link must use https' },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -218,6 +303,197 @@ describe('linkVectoreeUser', () => {
       emailVerified: true,
       twoFactorEnabled: false,
       openidId: 'user-1',
+    });
+  });
+
+  test('email start registers a new address and asks for the code', async () => {
+    const fetchImpl = jest.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
+      if (String(url).includes('/api/auth/users')) {
+        return jsonResponse({ requireEmailVerification: true }, 200);
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('Ada@Example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 200,
+      body: { requireEmailVerification: true },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [, init] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.email).toBe('ada@example.com');
+    expect(typeof body.password).toBe('string');
+    expect(body.password.length).toBeGreaterThanOrEqual(8);
+  });
+
+  test('email start resends a code when the address already exists', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
+      if (String(url).includes('/api/auth/users')) {
+        return jsonResponse({ code: 'AUTH_EMAIL_EXISTS', message: 'Email already exists' }, 409);
+      }
+      return jsonResponse({ ok: true }, 200);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 200,
+      body: { requireEmailVerification: true },
+    });
+    expect(String(fetchImpl.mock.calls[2]?.[0])).toContain('/api/auth/email/send-verification');
+  });
+
+  test('set password sends a code before it is entered', async () => {
+    const fetchImpl = jest.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse({ ok: true }, 200),
+    );
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.setPassword({
+      email: 'ada@example.com',
+      password: 'long-secret',
+      confirmPassword: 'long-secret',
+    });
+    expect(outcome).toEqual({ kind: 'response', status: 200, body: { codeSent: true } });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('/api/auth/email/send-reset-password');
+  });
+
+  test('set password exchanges the code and saves the new password', async () => {
+    const fetchImpl = jest.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('exchange-reset-password-token')) {
+        return jsonResponse({ token: 'reset-token' }, 200);
+      }
+      return jsonResponse({ ok: true }, 200);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.setPassword({
+      email: 'ada@example.com',
+      password: 'long-secret',
+      confirmPassword: 'long-secret',
+      code: '123456',
+    });
+    expect(outcome).toEqual({ kind: 'response', status: 200, body: { ok: true } });
+    const [, savedInit] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    const saved = JSON.parse(String(savedInit.body));
+    expect(saved).toEqual({ newPassword: 'long-secret', otp: 'reset-token' });
+  });
+
+  test('asks for a password instead of registering when email verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      throw new Error(`unexpected ${url}`);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({ kind: 'response', status: 200, body: { requirePassword: true } });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test('registers with the chosen password when email verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      return jsonResponse({
+        accessToken: 'app-user-jwt',
+        user: { id: 'user-1', email: 'ada@example.com', emailVerified: false },
+      });
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com', 'secret12');
+    expect(outcome).toMatchObject({
+      kind: 'session',
+      user: { email: 'ada@example.com', emailVerified: false },
+    });
+    const [, init] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'ada@example.com', password: 'secret12' });
+  });
+
+  test('rejects a short chosen password when email verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      throw new Error(`unexpected ${url}`);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const short = await auth.start('ada@example.com', 'secret1');
+    expect(short).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Use at least 8 characters' },
+    });
+    const long = await auth.start('ada@example.com', 'x'.repeat(129));
+    expect(long).toEqual({
+      kind: 'response',
+      status: 400,
+      body: { message: 'Use at least 8 characters' },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('sends an existing email to the password tab when verification is off', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(false));
+      return jsonResponse({ code: 'AUTH_EMAIL_EXISTS' }, 409);
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com', 'secret12');
+    expect(outcome).toMatchObject({ kind: 'response', status: 409, body: { usePassword: true } });
+    expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes('send-verification'))).toBe(false);
+  });
+
+  test('refuses an unverified session from registration when verification is required', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
+      return jsonResponse({
+        accessToken: 'app-user-jwt',
+        user: { id: 'user-1', email: 'ada@example.com', emailVerified: false },
+      });
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 403,
+      body: { message: 'Confirm this email before signing in' },
+    });
+  });
+
+  test('points an inactive organization wallet at billing', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/api/auth/methods')) return jsonResponse(methodsBody(true));
+      return jsonResponse(
+        { code: 'BILLING_WALLET_NOT_ACTIVATED', message: 'Organization wallet is not activated' },
+        402,
+      );
+    });
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.start('ada@example.com');
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 402,
+      body: {
+        code: 'BILLING_WALLET_NOT_ACTIVATED',
+        message: 'Organization wallet is not activated',
+        billingUrl: `${API}/dashboard/organization/billing`,
+      },
+    });
+  });
+
+  test('keeps a wallet sentence on another status as a normal error', async () => {
+    const fetchImpl = jest.fn(async () =>
+      jsonResponse({ message: 'Organization wallet is not activated' }, 503),
+    );
+    const auth = createVectoreeAppAuth({ credentials, fetchImpl });
+    const outcome = await auth.submit({
+      action: 'login',
+      email: 'a@example.com',
+      password: 'secret12',
+    });
+    expect(outcome).toEqual({
+      kind: 'response',
+      status: 503,
+      body: { message: 'Organization wallet is not activated' },
     });
   });
 });

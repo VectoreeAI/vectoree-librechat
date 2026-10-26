@@ -3,7 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { apiBaseFromOrigin, normalizeApiUrl } from './url';
 import { parseEnvFile, writeEnvFile } from './envfile';
+import { installCloudPreviewEnv } from './preview';
 import { VectoreeConfigError } from './errors';
+import { readDeployMode } from './mode';
 import { nonEmpty } from './text';
 
 export const APP_DATA_DIR = '/app/data';
@@ -138,16 +140,30 @@ export function clearUserProvidedOpenAI(projectRoot: string, env: NodeJS.Process
   }
 }
 
+export const VECTOREE_IMAGE_MODEL_DEFAULT = 'bytedance-seed/seedream-5-0-pro';
+export const VECTOREE_SPEECH_MODEL_DEFAULT = 'sesame/csm-1b';
+export const VECTOREE_SPEECH_VOICE_DEFAULT = 'alloy';
+
+export function applyGenerationDefaults(env: NodeJS.ProcessEnv): void {
+  if (!nonEmpty(env.VECTOREE_IMAGE_MODEL)) env.VECTOREE_IMAGE_MODEL = VECTOREE_IMAGE_MODEL_DEFAULT;
+  if (!nonEmpty(env.VECTOREE_SPEECH_MODEL)) env.VECTOREE_SPEECH_MODEL = VECTOREE_SPEECH_MODEL_DEFAULT;
+  if (!nonEmpty(env.VECTOREE_SPEECH_VOICE)) env.VECTOREE_SPEECH_VOICE = VECTOREE_SPEECH_VOICE_DEFAULT;
+}
+
 export function prepareVectoreeStartup(options: {
   env: NodeJS.ProcessEnv;
   projectRoot: string;
   linkDataRoot?: string;
 }): void {
+  installCloudPreviewEnv();
+  applyGenerationDefaults(options.env);
+  if (readDeployMode(options.env) === 'cloud') return;
   const root = options.linkDataRoot ?? resolveLinkDataRoot(options.env, options.projectRoot);
   hydrateProcessEnv(root, options.projectRoot, options.env);
 }
 
 export function hydrateProcessEnv(root: string, projectRoot: string, env: NodeJS.ProcessEnv): void {
+  if (readDeployMode(env) === 'cloud') return;
   clearUserProvidedOpenAI(projectRoot, env);
   const signal = readLinkSignal(root, projectRoot, env);
   if (!signal.linked || !signal.apiKey) return;

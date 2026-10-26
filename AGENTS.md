@@ -5,7 +5,7 @@ See CLAUDE.md.
 Normally branch off `dev` and target `dev`; `gh pr create` defaults to `main`, so pass `--base dev`
 explicitly. `main` is the released branch, kept as a fast-forward of `dev` and synced as-is — never
 open a backport pull request to `main`, because anything merged to `dev` reaches it at the next
-sync. Pull requests opened against `main` are retargeted automatically.
+sync. Nothing in this repo retargets a pull request opened against `main`.
 
 **Maintainer-directed canary exception:** Experimental work, or a PR ready to merge after review but
 not yet suitable for the next `main` sync, may instead target `canary`. The maintainer may choose
@@ -13,7 +13,7 @@ this before work starts or while reviewing a stale PR. For new canary work, bran
 `origin/canary` and pass `--base canary` explicitly; do not silently retarget an existing PR or
 promote canary code to `dev`. If a stale PR is redirected to canary, first check its base, diff and
 reviewed head against current canary; coordinate any rebase or new PR with the maintainer. A PR
-explicitly based on `canary` stays there; the main-to-dev retarget workflow does not move it.
+explicitly based on `canary` stays there.
 
 Still link related issues in the PR (for example, `Related to #N`) so the work remains
 traceable. `Fixes #N` does not close an issue on a `dev` or `canary` merge — GitHub honors closing

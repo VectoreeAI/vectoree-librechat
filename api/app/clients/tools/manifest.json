@@ -64,9 +64,9 @@
     "icon": "assets/openai.svg",
     "authConfig": [
       {
-        "authField": "DALLE3_API_KEY||DALLE_API_KEY",
+        "authField": "DALLE3_API_KEY||DALLE_API_KEY||VECTOREE_API_KEY",
         "label": "OpenAI API Key",
-        "description": "You can use DALL-E with your API Key from OpenAI."
+        "description": "Uses the linked Vectoree project key. A separate OpenAI key is optional."
       }
     ]
   },

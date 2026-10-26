@@ -394,7 +394,7 @@ export const getStartupConfig = (
 };
 
 export const getAIEndpoints = (): Promise<t.TEndpointsConfig> => {
-  return request.get(endpoints.aiEndpoints());
+  return request.get(endpoints.aiEndpoints(), { timeout: 15000 });
 };
 
 export const getTokenConfig = (): Promise<t.TTokenConfigMap> => {
@@ -402,7 +402,7 @@ export const getTokenConfig = (): Promise<t.TTokenConfigMap> => {
 };
 
 export const getModels = async (): Promise<t.TModelsConfig> => {
-  return request.get(endpoints.models());
+  return request.get(endpoints.models(), { timeout: 20000 });
 };
 
 /* Assistants */

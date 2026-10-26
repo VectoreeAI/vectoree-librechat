@@ -1,12 +1,12 @@
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import {
   VerifyEmail,
-  Registration,
   ResetPassword,
   ApiErrorWatcher,
   TwoFactorScreen,
   RequestPasswordReset,
 } from '~/components/Auth';
+import VectoreePreviewExpired from '~/components/Auth/VectoreePreviewExpired';
 import { MarketplaceProvider } from '~/components/Agents/MarketplaceContext';
 import VectoreeLinkGate from '~/components/Auth/VectoreeLinkGate';
 import AgentMarketplace from '~/components/Agents/Marketplace';
@@ -69,6 +69,11 @@ export const router = createBrowserRouter(
       errorElement: <RouteErrorBoundary />,
     },
     {
+      path: 'preview-expired',
+      element: <VectoreePreviewExpired />,
+      errorElement: <RouteErrorBoundary />,
+    },
+    {
       element: <VectoreeLinkGate />,
       errorElement: <RouteErrorBoundary />,
       children: [
@@ -98,7 +103,7 @@ export const router = createBrowserRouter(
       children: [
         {
           path: 'register',
-          element: <Registration />,
+          element: <Navigate to="/login" replace />,
         },
         {
           path: 'forgot-password',

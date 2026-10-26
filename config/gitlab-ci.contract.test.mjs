@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 
@@ -15,6 +15,19 @@ const job = (name, next) => {
   return ciText.slice(start, end);
 };
 
+const composeText = readFileSync(path.join(root, 'docker-compose.deploy.yml'), 'utf8');
+
+const service = (name, next) => {
+  const start = composeText.indexOf(`\n  ${name}:\n`);
+  assert.notEqual(start, -1, name);
+  const candidates = next
+    ? [`\n  ${next}:\n`, `\n${next}:\n`].map((needle) => composeText.indexOf(needle, start + 1))
+    : [];
+  const end = next ? Math.min(...candidates.filter((index) => index !== -1)) : composeText.length;
+  assert.notEqual(end, Number.POSITIVE_INFINITY, next);
+  return composeText.slice(start, end);
+};
+
 const pattern = ciText.match(/secret_pattern='([^']*)'/)?.[1];
 
 const matchesSecret = (text) => {
@@ -23,8 +36,8 @@ const matchesSecret = (text) => {
   return result.status === 0;
 };
 
-test('pipeline has no deploy path and injects the GitHub token into the publish URL', () => {
-  assert.match(ciText, /^stages:\n  - \.pre\n  - check\n  - publish\n/m);
+test('pipeline deploys dev and main and injects the GitHub token into the publish URL', () => {
+  assert.match(ciText, /^stages:\n  - \.pre\n  - check\n  - deploy\n  - publish\n/m);
   for (const rule of [
     '$CI_PIPELINE_SOURCE == "merge_request_event"',
     '$CI_COMMIT_BRANCH == "dev"',
@@ -33,19 +46,7 @@ test('pipeline has no deploy path and injects the GitHub token into the publish 
   ]) {
     assert.ok(ciText.includes(rule), rule);
   }
-  for (const forbidden of [
-    'deploy_development',
-    'deploy_production',
-    '.deploy',
-    'docker login',
-    'docker build',
-    'docker push',
-    'ssh ',
-    'scp ',
-    'set -x',
-  ]) {
-    assert.equal(ciText.includes(forbidden), false, forbidden);
-  }
+  assert.equal(ciText.includes('set -x'), false);
   assert.deepEqual(ciText.match(/:\/\/[^\s/]+@/g), [
     '://gitlab-ci-token:${CI_JOB_TOKEN}@',
     '://x-access-token:${GITHUB_TOKEN}@',
@@ -74,8 +75,62 @@ test('backup_main records the previous main without interpolating the message', 
   assert.match(backup, /git push origin HEAD:refs\/heads\/main-backup/);
 });
 
+test('dev deploys after tests and main deploys after the backup', () => {
+  const shared = job('.deploy', 'deploy_development');
+  const dev = job('deploy_development', 'deploy_production');
+  const prod = job('deploy_production', 'publish_github');
+  assert.match(shared, /stage: deploy/);
+  assert.match(shared, /\/opt\/vectoree-librechat/);
+  assert.match(shared, /docker build -f Dockerfile/);
+  assert.match(shared, /docker push "\$LIBRECHAT_IMAGE"/);
+  assert.match(shared, /docker login "\$CI_REGISTRY"/);
+  // The pull credential is piped over SSH stdin; it is never written to the deploy host.
+  assert.match(shared, /printf '%s' "\$PULL_REGISTRY_PASSWORD" \| \$SSH/);
+  assert.match(shared, /--password-stdin"/);
+  assert.equal(shared.includes("CI_REGISTRY_PASSWORD='"), false);
+  assert.equal(shared.includes('scp "$PASS_FILE"'), false);
+  assert.match(shared, /rm -f "\$DEPLOY_PATH\/\.registry-pass"/);
+  assert.match(shared, /rm -f ~\/\.ssh\/id_ed25519/);
+  assert.ok(
+    shared.indexOf('trap \'sudo docker logout "$CI_REGISTRY"') <
+      shared.indexOf('sudo -E bash "$DEPLOY_PATH/deploy/deploy-remote.sh"'),
+  );
+  // Production must pin the host key; dev may still fall back to accept-new.
+  assert.match(
+    shared,
+    /if \[\[ "\$\{CI_JOB_NAME:-\}" != "deploy_development" && -z "\$\{DEPLOY_HOST_KEY:-\}" \]\]; then/,
+  );
+  assert.ok(
+    shared.indexOf('DEPLOY_HOST_KEY is required for production deploys') <
+      shared.indexOf('SSH="ssh $SSH_OPTS'),
+  );
+  assert.match(shared, /StrictHostKeyChecking=yes/);
+  assert.match(shared, /DEV_DEPLOY_HOST_KEY unset; dev deploy falls back/);
+  assert.match(dev, /extends: \.deploy/);
+  assert.match(dev, /resource_group: librechat-development-deploy/);
+  assert.match(dev, /\$CI_COMMIT_BRANCH == "dev"/);
+  assert.match(dev, /\$\{CI_REGISTRY_IMAGE\}\/api:dev/);
+  assert.match(prod, /resource_group: librechat-production-deploy/);
+  assert.match(prod, /\$CI_COMMIT_BRANCH == "main"/);
+  assert.match(prod, /needs:\n {4}- test\n {4}- unit\n {4}- backup_main/);
+});
+
+test('only the api container receives the deploy secret file', () => {
+  const api = service('api', 'mongodb');
+  const mongodb = service('mongodb', 'volumes');
+  assert.match(api, /env_file:\n {6}- \.env/);
+  assert.equal(/^\s+env_file:/m.test(mongodb), false);
+  assert.match(mongodb, /MONGO_INITDB_ROOT_USERNAME: \$\{MONGO_ROOT_USER:-librechat\}/);
+  assert.match(
+    mongodb,
+    /MONGO_INITDB_ROOT_PASSWORD: \$\{MONGO_ROOT_PASSWORD:\?set MONGO_ROOT_PASSWORD\}/,
+  );
+  assert.equal(/^\s+MONGO_URI:/m.test(mongodb), false);
+  assert.match(mongodb, /--authenticationDatabase admin/);
+});
+
 test('test job runs only the pipeline contract test', () => {
-  const check = job('test', 'publish_github');
+  const check = job('test', 'unit');
   assert.match(check, /image: node:24\.16\.0-bookworm-slim/);
   assert.match(check, /timeout: 10m/);
   for (const rule of [
@@ -160,4 +215,60 @@ test('local tool directories are ignored and untracked', () => {
     { cwd: root, encoding: 'utf8' },
   );
   assert.equal(tracked, '');
+});
+
+test('gitignore does not hide source behind an unanchored directory name', () => {
+  const allowed = new Set([
+    'data',
+    'build',
+    'dist',
+    'node_modules',
+    'meili_data',
+    'bower_components',
+    'uploads',
+    'release',
+    '.swarm',
+    '.hive-mind',
+    '.claude-flow',
+    '.vectoree',
+    '.agent',
+    '.agents',
+    'openspec',
+    '.bg-shell',
+  ]);
+  const found = [];
+  for (const raw of readFileSync(path.join(root, '.gitignore'), 'utf8').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('!') || !line.endsWith('/')) continue;
+    const body = line.slice(0, -1);
+    if (body.includes('/')) continue;
+    found.push(body);
+    assert.equal(allowed.has(body), true, `unanchored ignore ${line}`);
+  }
+  assert.equal(found.includes('prompts'), false);
+
+  for (const file of [
+    'packages/api/src/prompts/index.ts',
+    'api/app/clients/prompts/index.js',
+    'client/src/components/Prompts/index.ts',
+    'client/src/hooks/Prompts/index.ts',
+  ]) {
+    assert.equal(
+      execFileSync('git', ['ls-files', '--error-unmatch', '--', file], {
+        cwd: root,
+        encoding: 'utf8',
+      }).trim().length > 0,
+      true,
+      file,
+    );
+  }
+  for (const file of [
+    'packages/api/src/types/es2024-string.d.ts',
+    'packages/api/src/types/proxy-from-env.d.ts',
+    'packages/data-schemas/src/types/winston-transports.d.ts',
+  ]) {
+    assert.equal(existsSync(path.join(root, file)), true, file);
+    const ignored = spawnSync('git', ['check-ignore', '-q', '--', file], { cwd: root });
+    assert.equal(ignored.status, 1, file);
+  }
 });
