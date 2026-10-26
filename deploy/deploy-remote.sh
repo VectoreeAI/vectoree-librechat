@@ -70,6 +70,22 @@ ensure_secret JWT_SECRET 32
 ensure_secret JWT_REFRESH_SECRET 32
 ensure_secret CREDS_KEY 32
 ensure_secret CREDS_IV 16
+ensure_secret MONGO_ROOT_PASSWORD 24
+
+# Keep Mongo URI in sync with root credentials (URL-encode user/password).
+mongo_user="$(read_dotenv MONGO_ROOT_USER)"
+if [[ -z "$mongo_user" ]]; then
+  mongo_user="librechat"
+  upsert_env MONGO_ROOT_USER "$mongo_user"
+fi
+mongo_pass="$(read_dotenv MONGO_ROOT_PASSWORD)"
+if [[ -z "$mongo_pass" ]]; then
+  echo "[remote] ERROR: MONGO_ROOT_PASSWORD is empty"
+  exit 1
+fi
+mongo_user_enc="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$mongo_user")"
+mongo_pass_enc="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$mongo_pass")"
+upsert_env MONGO_URI "mongodb://${mongo_user_enc}:${mongo_pass_enc}@mongodb:27017/LibreChat?authSource=admin"
 
 # The image runs as uid 1000. A root-owned mode 600 mount is visible but not readable.
 if [[ "$(id -u)" -eq 0 ]]; then

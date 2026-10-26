@@ -5,9 +5,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   confirmPreviewSwitch,
   declinePreviewSwitch,
-  forgetPreviewTicket,
   nextVectoreeGate,
   redeemPreviewTicketOnce,
+  takePreviewTicketFromLocation,
   useVectoreeLinkStatus,
   vectoreeLinkStatusKey,
 } from '~/data-provider';
@@ -15,18 +15,14 @@ import { useLocalize } from '~/hooks';
 
 type SwitchAsk = {
   projectName: string;
-  switchToken: string;
 };
-
-function ticketInLocation(): string | null {
-  return new URLSearchParams(window.location.search).get('ticket');
-}
 
 export default function VectoreeLinkGate() {
   const localize = useLocalize();
   const queryClient = useQueryClient();
   const status = useVectoreeLinkStatus();
-  const [pendingTicket, setPendingTicket] = useState(() => Boolean(ticketInLocation()));
+  const [ticket] = useState(() => takePreviewTicketFromLocation());
+  const [pendingTicket, setPendingTicket] = useState(() => Boolean(ticket));
   const [switchAsk, setSwitchAsk] = useState<SwitchAsk | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -36,7 +32,6 @@ export default function VectoreeLinkGate() {
       setPendingTicket(false);
       return;
     }
-    const ticket = ticketInLocation();
     if (!ticket) {
       setPendingTicket(false);
       return;
@@ -44,32 +39,33 @@ export default function VectoreeLinkGate() {
     let cancelled = false;
     redeemPreviewTicketOnce(ticket).then(async (body) => {
       if (cancelled) return;
-      if (body?.confirm && body.switchToken) {
+      if (body?.confirm) {
         setSwitchAsk({
           projectName: body.projectName || body.projectId || '',
-          switchToken: body.switchToken,
         });
-        forgetPreviewTicket();
         return;
       }
       await queryClient.invalidateQueries(vectoreeLinkStatusKey);
-      forgetPreviewTicket();
       setPendingTicket(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [queryClient, status.data?.deployMode, status.isLoading]);
+  }, [queryClient, status.data?.deployMode, status.isLoading, ticket]);
 
   async function stayOnCurrentProject(): Promise<void> {
     if (!switchAsk || busy) return;
     setBusy(true);
     try {
-      await declinePreviewSwitch(switchAsk.switchToken);
+      await declinePreviewSwitch();
+    } catch {
+      // The pending switch expired or the preview session is gone; the status query below decides where to go.
+    } finally {
+      // A failed decline still must not trap the visitor on the prompt.
       setSwitchAsk(null);
       setPendingTicket(false);
-    } finally {
       setBusy(false);
+      await queryClient.invalidateQueries(vectoreeLinkStatusKey);
     }
   }
 
@@ -77,7 +73,7 @@ export default function VectoreeLinkGate() {
     if (!switchAsk || busy) return;
     setBusy(true);
     try {
-      await confirmPreviewSwitch(switchAsk.switchToken);
+      await confirmPreviewSwitch();
       await queryClient.invalidateQueries(vectoreeLinkStatusKey);
       setSwitchAsk(null);
       setPendingTicket(false);
@@ -90,17 +86,29 @@ export default function VectoreeLinkGate() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-surface-primary px-6">
         <div className="w-full max-w-md text-center">
-          <h1 className="text-xl text-text-primary">{localize('com_auth_vectoree_preview_switch')}</h1>
+          <h1 className="text-xl text-text-primary">
+            {localize('com_auth_vectoree_preview_switch')}
+          </h1>
           <p className="mt-3 text-sm text-text-secondary">
             {localize('com_auth_vectoree_preview_switch_note', {
               0: switchAsk.projectName,
             })}
           </p>
           <div className="mt-6 flex flex-col gap-3">
-            <Button type="button" variant="submit" disabled={busy} onClick={() => void switchProject()}>
+            <Button
+              type="button"
+              variant="submit"
+              disabled={busy}
+              onClick={() => void switchProject()}
+            >
               {localize('com_auth_vectoree_preview_switch_confirm')}
             </Button>
-            <Button type="button" variant="outline" disabled={busy} onClick={() => void stayOnCurrentProject()}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void stayOnCurrentProject()}
+            >
               {localize('com_auth_vectoree_preview_switch_stay')}
             </Button>
           </div>

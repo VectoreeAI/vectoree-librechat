@@ -1,5 +1,9 @@
 # 服务器上拉镜像启动，不在机器上构建。
 #   docker compose -f docker-compose.deploy.yml up -d
+#
+# Mongo 使用 .env 里的 MONGO_ROOT_USER / MONGO_ROOT_PASSWORD（deploy-remote.sh 会生成）。
+# MONGO_INITDB_* 只在空数据卷首次初始化时建 root 用户。
+# 若服务器上仍是旧的 --noauth 数据卷，需重建 mongo 卷后再部署，或手工创建同名用户。
 
 name: vectoree-librechat
 
@@ -14,7 +18,7 @@ services:
       HOST: 0.0.0.0
       PORT: "3080"
       NODE_ENV: production
-      MONGO_URI: mongodb://mongodb:27017/LibreChat
+      MONGO_URI: ${MONGO_URI:?set MONGO_URI}
       VECTOREE_API_URL: ${VECTOREE_API_URL:-https://vectoree.ai}
       DEPLOY_MODE: ${DEPLOY_MODE:-cloud}
     ports:
@@ -48,11 +52,20 @@ services:
     image: mongo:8.0.20
     container_name: vectoree-librechat-mongodb
     restart: unless-stopped
-    command: mongod --noauth
+    # No env_file here: Mongo needs only MONGO_INITDB_* below. Loading .env would
+    # put JWT_SECRET, CREDS_KEY/IV and the credentialed MONGO_URI into this container.
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-librechat}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: LibreChat
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10

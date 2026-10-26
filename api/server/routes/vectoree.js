@@ -46,11 +46,14 @@ const appAuth = createVectoreeAppAuth({
 const router = express.Router();
 
 function publicOrigin(req) {
-  const domain = typeof process.env.DOMAIN_SERVER === 'string' ? process.env.DOMAIN_SERVER.trim() : '';
+  const domain =
+    typeof process.env.DOMAIN_SERVER === 'string' ? process.env.DOMAIN_SERVER.trim() : '';
   if (domain) return domain;
   const forwardedProto = req.get('x-forwarded-proto');
   const proto =
-    (typeof forwardedProto === 'string' && forwardedProto.split(',')[0].trim()) || req.protocol || 'http';
+    (typeof forwardedProto === 'string' && forwardedProto.split(',')[0].trim()) ||
+    req.protocol ||
+    'http';
   const host = req.get('x-forwarded-host') || req.get('host');
   return `${proto}://${host}`;
 }
@@ -64,14 +67,20 @@ function resetRedirect(action) {
 function sendError(res, error) {
   const status = error && (error.status === 400 || error.status === 502) ? error.status : 500;
   const message =
-    status === 500 || typeof error?.message !== 'string' ? 'Could not connect Vectoree' : error.message;
+    status === 500 || typeof error?.message !== 'string'
+      ? 'Could not connect Vectoree'
+      : error.message;
   res.status(status).json({ status: 'error', message });
 }
 
 function secureRequest(req) {
-  const forwarded = req.get('x-forwarded-proto');
-  const proto = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '';
-  return proto === 'https' || req.secure === true;
+  // Prefer Express trust-proxy (req.secure). Never trust a client-supplied
+  // X-Forwarded-Proto first hop. Force Secure when the configured public origin
+  // is https or when running in production.
+  if (req.secure === true) return true;
+  if (configuredPublicOrigin(process.env)) return true;
+  if (process.env.NODE_ENV === 'production') return true;
+  return false;
 }
 
 function rejectCloudLink(_req, res, next) {
@@ -98,52 +107,69 @@ function clearAuthCookies(res) {
 }
 
 function applyPreviewResult(res, result) {
+  // Clearing login cookies only when establishing/replacing the preview session.
   if (result.cookie) {
     clearAuthCookies(res);
     res.cookie(result.cookie.name, result.cookie.value, result.cookie.options);
   }
+  if (Array.isArray(result.cookies)) {
+    for (const cookie of result.cookies) {
+      res.cookie(cookie.name, cookie.value, cookie.options);
+    }
+  }
   return res.status(result.status).json(result.body);
 }
 
-router.post('/preview/redeem', middleware.requireSameOrigin, middleware.previewLimiter, async (req, res) => {
-  try {
-    const result = await redeemCloudPreview({
-      env: process.env,
-      ticket: req.body && typeof req.body === 'object' ? req.body.ticket : undefined,
-      cookieHeader: req.headers.cookie,
-      secure: secureRequest(req),
-    });
-    return applyPreviewResult(res, result);
-  } catch (error) {
-    return sendError(res, error);
-  }
-});
+router.post(
+  '/preview/redeem',
+  middleware.requireSameOrigin,
+  middleware.previewLimiter,
+  async (req, res) => {
+    try {
+      const result = await redeemCloudPreview({
+        env: process.env,
+        ticket: req.body && typeof req.body === 'object' ? req.body.ticket : undefined,
+        cookieHeader: req.headers.cookie,
+        secure: secureRequest(req),
+      });
+      return applyPreviewResult(res, result);
+    } catch (error) {
+      return sendError(res, error);
+    }
+  },
+);
 
-router.post('/preview/confirm', middleware.requireSameOrigin, middleware.previewLimiter, (req, res) => {
-  try {
-    const result = confirmCloudPreview({
-      env: process.env,
-      switchToken: req.body && typeof req.body === 'object' ? req.body.switchToken : undefined,
-      cookieHeader: req.headers.cookie,
-      secure: secureRequest(req),
-    });
-    return applyPreviewResult(res, result);
-  } catch (error) {
-    return sendError(res, error);
-  }
-});
+router.post(
+  '/preview/confirm',
+  middleware.requireSameOrigin,
+  middleware.previewLimiter,
+  (req, res) => {
+    try {
+      const result = confirmCloudPreview({
+        env: process.env,
+        cookieHeader: req.headers.cookie,
+        secure: secureRequest(req),
+      });
+      return applyPreviewResult(res, result);
+    } catch (error) {
+      return sendError(res, error);
+    }
+  },
+);
 
-router.post('/preview/decline', middleware.requireSameOrigin, middleware.previewLimiter, (req, res) => {
-  try {
-    const result = declineCloudPreview(
-      process.env,
-      req.body && typeof req.body === 'object' ? req.body.switchToken : undefined,
-    );
-    return res.status(result.status).json(result.body);
-  } catch (error) {
-    return sendError(res, error);
-  }
-});
+router.post(
+  '/preview/decline',
+  middleware.requireSameOrigin,
+  middleware.previewLimiter,
+  (req, res) => {
+    try {
+      const result = declineCloudPreview(process.env, req.headers.cookie, secureRequest(req));
+      return applyPreviewResult(res, result);
+    } catch (error) {
+      return sendError(res, error);
+    }
+  },
+);
 
 /** Relinking swaps the sign-in authority for every account, so it needs an admin. */
 function requireAdminToRelink(req, res, next) {
@@ -210,7 +236,8 @@ router.post(
       const redirectTo = resetRedirect(body.action);
       if (redirectTo === null) {
         return res.status(400).json({
-          message: 'Set DOMAIN_CLIENT or DOMAIN_SERVER to an https address before sending a reset link',
+          message:
+            'Set DOMAIN_CLIENT or DOMAIN_SERVER to an https address before sending a reset link',
         });
       }
       const outcome =

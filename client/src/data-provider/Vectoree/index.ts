@@ -9,6 +9,7 @@ export {
   startVectoreeLink,
   submitVectoreeAppAuth,
   submitVectoreePassword,
+  takePreviewTicketFromLocation,
   useMarkVectoreeLinked,
   useVectoreeLinkPoll,
   useVectoreeLinkStatus,
