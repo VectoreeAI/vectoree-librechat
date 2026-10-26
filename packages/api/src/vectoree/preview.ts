@@ -244,8 +244,8 @@ export function confirmCloudPreview(input: {
 export function declineCloudPreview(
   env: NodeJS.ProcessEnv,
   cookieHeader?: string,
-  secure = false,
-  now = Date.now(),
+  secure: boolean = false,
+  now: number = Date.now(),
 ): PreviewRedeemResult {
   if (readDeployMode(env) !== 'cloud') {
     return { status: 404, body: { message: 'Not available in local mode' } };
