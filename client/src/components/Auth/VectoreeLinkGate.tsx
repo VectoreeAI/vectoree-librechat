@@ -5,9 +5,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   confirmPreviewSwitch,
   declinePreviewSwitch,
-  forgetPreviewTicket,
   nextVectoreeGate,
   redeemPreviewTicketOnce,
+  takePreviewTicketFromLocation,
   useVectoreeLinkStatus,
   vectoreeLinkStatusKey,
 } from '~/data-provider';
@@ -15,18 +15,14 @@ import { useLocalize } from '~/hooks';
 
 type SwitchAsk = {
   projectName: string;
-  switchToken: string;
 };
-
-function ticketInLocation(): string | null {
-  return new URLSearchParams(window.location.search).get('ticket');
-}
 
 export default function VectoreeLinkGate() {
   const localize = useLocalize();
   const queryClient = useQueryClient();
   const status = useVectoreeLinkStatus();
-  const [pendingTicket, setPendingTicket] = useState(() => Boolean(ticketInLocation()));
+  const [ticket] = useState(() => takePreviewTicketFromLocation());
+  const [pendingTicket, setPendingTicket] = useState(() => Boolean(ticket));
   const [switchAsk, setSwitchAsk] = useState<SwitchAsk | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -36,7 +32,6 @@ export default function VectoreeLinkGate() {
       setPendingTicket(false);
       return;
     }
-    const ticket = ticketInLocation();
     if (!ticket) {
       setPendingTicket(false);
       return;
@@ -44,28 +39,25 @@ export default function VectoreeLinkGate() {
     let cancelled = false;
     redeemPreviewTicketOnce(ticket).then(async (body) => {
       if (cancelled) return;
-      if (body?.confirm && body.switchToken) {
+      if (body?.confirm) {
         setSwitchAsk({
           projectName: body.projectName || body.projectId || '',
-          switchToken: body.switchToken,
         });
-        forgetPreviewTicket();
         return;
       }
       await queryClient.invalidateQueries(vectoreeLinkStatusKey);
-      forgetPreviewTicket();
       setPendingTicket(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [queryClient, status.data?.deployMode, status.isLoading]);
+  }, [queryClient, status.data?.deployMode, status.isLoading, ticket]);
 
   async function stayOnCurrentProject(): Promise<void> {
     if (!switchAsk || busy) return;
     setBusy(true);
     try {
-      await declinePreviewSwitch(switchAsk.switchToken);
+      await declinePreviewSwitch();
       setSwitchAsk(null);
       setPendingTicket(false);
     } finally {
@@ -77,7 +69,7 @@ export default function VectoreeLinkGate() {
     if (!switchAsk || busy) return;
     setBusy(true);
     try {
-      await confirmPreviewSwitch(switchAsk.switchToken);
+      await confirmPreviewSwitch();
       await queryClient.invalidateQueries(vectoreeLinkStatusKey);
       setSwitchAsk(null);
       setPendingTicket(false);

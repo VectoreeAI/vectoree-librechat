@@ -3,6 +3,7 @@ const {
   isEnabled,
   math,
   clearCloudFrontCookies,
+  configuredPublicOrigin,
   dropPreviewSession,
   publicCookiePath,
   PREVIEW_COOKIE,
@@ -97,13 +98,15 @@ const logoutController = async (req, res) => {
     res.clearCookie('token_provider');
     if (typeof dropPreviewSession === 'function' && typeof publicCookiePath === 'function') {
       dropPreviewSession(req.headers.cookie);
-      const forwarded = req.headers['x-forwarded-proto'];
-      const proto = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '';
+      const secure =
+        req.secure === true ||
+        Boolean(configuredPublicOrigin(process.env)) ||
+        process.env.NODE_ENV === 'production';
       res.clearCookie(PREVIEW_COOKIE, {
         path: publicCookiePath(process.env),
         httpOnly: true,
         sameSite: 'lax',
-        secure: proto === 'https' || req.secure === true,
+        secure,
       });
     }
     clearCloudFrontCookies(res, {

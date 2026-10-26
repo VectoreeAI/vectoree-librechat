@@ -140,13 +140,16 @@ describe('cloud preview', () => {
 
     expect(second.body).toMatchObject({ projectId: 'proj-b', confirm: true });
     expect(second.cookie).toBeUndefined();
+    expect(second.body.switchToken).toBeUndefined();
+    expect(second.cookies?.[0]?.name).toBe('ve_preview_switch');
     expect(JSON.stringify(second.body)).not.toContain('sk-ve-');
     expect(previewActive(cookie)).toBe(true);
-    expect(previewActive(`ve_preview=${second.body.switchToken}`)).toBe(false);
+    const switchCookie = `${second.cookies?.[0]?.name}=${second.cookies?.[0]?.value}`;
+    expect(previewActive(switchCookie)).toBe(false);
     expect(assertCloudPreview(env, cookie, { openidId: 'user-a', provider: 'vectoree' })).toBeNull();
     expect(assertCloudPreview(env, cookie, { openidId: 'user-b', provider: 'vectoree' })?.message).toMatch(/Sign in again/);
 
-    const declined = declineCloudPreview(env, second.body.switchToken);
+    const declined = declineCloudPreview(env, undefined, `${cookie}; ${switchCookie}`, true);
     expect(declined.status).toBe(200);
     expect(previewActive(cookie)).toBe(true);
 
@@ -158,10 +161,17 @@ describe('cloud preview', () => {
       secure: false,
       fetchImpl,
     });
+    const pendingSwitch = `${third.cookies?.[0]?.name}=${third.cookies?.[0]?.value}`;
+    // Stolen switch cookie alone must not confirm in another browser (no ve_preview).
+    const stolen = confirmCloudPreview({
+      env,
+      cookieHeader: pendingSwitch,
+      secure: true,
+    });
+    expect(stolen.status).toBe(401);
     const confirmed = confirmCloudPreview({
       env,
-      switchToken: third.body.switchToken,
-      cookieHeader: cookie,
+      cookieHeader: `${cookie}; ${pendingSwitch}`,
       secure: true,
     });
     const nextCookie = `${confirmed.cookie?.name}=${confirmed.cookie?.value}`;

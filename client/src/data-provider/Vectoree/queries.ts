@@ -66,6 +66,17 @@ export function forgetPreviewTicket(): void {
   window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
+/** Read ?ticket= and strip it from the address bar immediately to shrink Referer/history leakage. */
+export function takePreviewTicketFromLocation(): string | null {
+  const url = new URL(window.location.href);
+  const ticket = url.searchParams.get('ticket');
+  if (ticket === null) return null;
+  url.searchParams.delete('ticket');
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  const trimmed = ticket.trim();
+  return trimmed ? trimmed : null;
+}
+
 function readPreviewBody(data: unknown): PreviewRedeemBody {
   const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   return {
@@ -99,12 +110,13 @@ export async function redeemPreview(ticket: string): Promise<PreviewRedeemBody> 
   return postPreview('/api/vectoree/preview/redeem', { ticket });
 }
 
-export async function confirmPreviewSwitch(switchToken: string): Promise<PreviewRedeemBody> {
-  return postPreview('/api/vectoree/preview/confirm', { switchToken });
+export async function confirmPreviewSwitch(): Promise<PreviewRedeemBody> {
+  // switch token is bound to HttpOnly ve_preview_switch; body token is unused.
+  return postPreview('/api/vectoree/preview/confirm', {});
 }
 
-export async function declinePreviewSwitch(switchToken: string): Promise<void> {
-  await postPreview('/api/vectoree/preview/decline', { switchToken });
+export async function declinePreviewSwitch(): Promise<void> {
+  await postPreview('/api/vectoree/preview/decline', {});
 }
 
 export type VectoreeConnectSnapshot = {

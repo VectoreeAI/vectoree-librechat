@@ -23,9 +23,13 @@ jest.mock('@librechat/data-schemas', () => ({
 jest.mock('@librechat/api', () => ({
   createVectoreeLink: () => mockLink,
   createVectoreeAppAuth: () => mockAppAuth,
+  configuredPublicOrigin: jest.fn(() => null),
+  confirmCloudPreview: jest.fn(),
+  declineCloudPreview: jest.fn(),
   getBalanceConfig: jest.fn(),
   isEmailDomainAllowed: jest.fn(),
   linkVectoreeUser: jest.fn(),
+  bindPreviewOwner: jest.fn(),
   previewActive: jest.fn(() => false),
   preAuthTenantMiddleware: (req, res, next) => next(),
   publicDeploymentStatus: (_env, linked) => ({ ...linked, deployMode: 'local', previewed: false }),

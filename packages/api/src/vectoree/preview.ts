@@ -7,6 +7,7 @@ import { nonEmpty, readErrorMessage } from './text';
 import { readDeployMode } from './mode';
 
 export const PREVIEW_COOKIE = 've_preview';
+export const PREVIEW_SWITCH_COOKIE = 've_preview_switch';
 
 const IDLE_MS = 12 * 60 * 60 * 1000;
 const PENDING_MS = 2 * 60 * 1000;
@@ -25,6 +26,8 @@ type StoredPreview = PreviewCredentials & {
   lastUsed: number;
   pending?: boolean;
   ownerId?: string;
+  /** Active ve_preview id that must accompany confirm/decline (same browser). */
+  fromPreviewId?: string;
 };
 
 const previews = new Map<string, StoredPreview>();
@@ -53,11 +56,14 @@ export type PreviewRedeemResult = {
     projectId?: string;
     projectName?: string;
     confirm?: boolean;
+    /** @deprecated Prefer HttpOnly ve_preview_switch cookie; kept only for older clients. */
     switchToken?: string;
     message?: string;
     code?: 'preview_required';
   };
   cookie?: PreviewCookie;
+  /** Additional Set-Cookie values (e.g. pending switch token). */
+  cookies?: PreviewCookie[];
 };
 
 export type PreviewPrincipal = {
@@ -180,8 +186,19 @@ export async function redeemCloudPreview(input: {
   }
   if (previous && !previous.pending && now - previous.lastUsed <= IDLE_MS) {
     const id = randomBytes(32).toString('hex');
-    previews.set(id, { apiUrl, apiKey, projectId, lastUsed: now, pending: true });
-    return { status: 200, body: { projectId, projectName, confirm: true, switchToken: id } };
+    previews.set(id, {
+      apiUrl,
+      apiKey,
+      projectId,
+      lastUsed: now,
+      pending: true,
+      fromPreviewId: previousId,
+    });
+    return {
+      status: 200,
+      body: { projectId, projectName, confirm: true },
+      cookies: [switchCookie(input.env, input.secure, id)],
+    };
   }
   if (previousId && PREVIEW_ID.test(previousId)) previews.delete(previousId);
   const id = randomBytes(32).toString('hex');
@@ -191,7 +208,7 @@ export async function redeemCloudPreview(input: {
 
 export function confirmCloudPreview(input: {
   env: NodeJS.ProcessEnv;
-  switchToken: unknown;
+  switchToken?: unknown;
   cookieHeader?: string;
   secure: boolean;
   now?: () => number;
@@ -199,27 +216,44 @@ export function confirmCloudPreview(input: {
   if (readDeployMode(input.env) !== 'cloud') {
     return { status: 404, body: { message: 'Not available in local mode' } };
   }
-  const pending = takePending(input.switchToken, input.now?.() ?? Date.now());
+  const token = resolveSwitchToken(input.cookieHeader, input.switchToken);
+  const pending = takePending(token, input.now?.() ?? Date.now());
   if (!pending) return expiredPreview();
   const previousId = cookieValue(input.cookieHeader, PREVIEW_COOKIE);
-  if (previousId && previousId !== pending.id) previews.delete(previousId);
+  if (!previousId || previousId !== pending.stored.fromPreviewId) {
+    return expiredPreview();
+  }
+  if (previousId !== pending.id) previews.delete(previousId);
   pending.stored.pending = false;
   pending.stored.ownerId = undefined;
+  pending.stored.fromPreviewId = undefined;
   return {
     status: 200,
     body: { projectId: pending.stored.projectId, projectName: pending.stored.projectId },
     cookie: previewCookie(input.env, input.secure, pending.id),
+    cookies: [clearSwitchCookie(input.env, input.secure)],
   };
 }
 
-export function declineCloudPreview(env: NodeJS.ProcessEnv, switchToken: unknown): PreviewRedeemResult {
+export function declineCloudPreview(
+  env: NodeJS.ProcessEnv,
+  switchToken: unknown,
+  cookieHeader?: string,
+  secure = false,
+): PreviewRedeemResult {
   if (readDeployMode(env) !== 'cloud') {
     return { status: 404, body: { message: 'Not available in local mode' } };
   }
-  const id = typeof switchToken === 'string' ? switchToken : '';
+  const id = resolveSwitchToken(cookieHeader, switchToken);
   const stored = PREVIEW_ID.test(id) ? previews.get(id) : undefined;
-  if (stored?.pending) previews.delete(id);
-  return { status: 200, body: {} };
+  const previousId = cookieValue(cookieHeader, PREVIEW_COOKIE);
+  if (stored?.pending) {
+    if (stored.fromPreviewId && previousId && previousId !== stored.fromPreviewId) {
+      return expiredPreview();
+    }
+    previews.delete(id);
+  }
+  return { status: 200, body: {}, cookies: [clearSwitchCookie(env, secure)] };
 }
 
 export function bindPreviewOwner(cookieHeader: string | undefined, ownerId: string): boolean {
@@ -326,6 +360,41 @@ function touchPreview(cookieHeader: string | undefined, now = Date.now()): Previ
   const stored = activeStored(cookieHeader, now);
   if (!stored) return null;
   return { apiUrl: stored.apiUrl, apiKey: stored.apiKey, projectId: stored.projectId };
+}
+
+
+function resolveSwitchToken(cookieHeader: string | undefined, switchToken: unknown): string {
+  const fromCookie = cookieValue(cookieHeader, PREVIEW_SWITCH_COOKIE);
+  if (fromCookie && PREVIEW_ID.test(fromCookie)) return fromCookie;
+  return typeof switchToken === 'string' ? switchToken : '';
+}
+
+function switchCookie(env: NodeJS.ProcessEnv, secure: boolean, id: string): PreviewCookie {
+  return {
+    name: PREVIEW_SWITCH_COOKIE,
+    value: id,
+    options: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure,
+      path: publicCookiePath(env),
+      maxAge: PENDING_MS,
+    },
+  };
+}
+
+function clearSwitchCookie(env: NodeJS.ProcessEnv, secure: boolean): PreviewCookie {
+  return {
+    name: PREVIEW_SWITCH_COOKIE,
+    value: '',
+    options: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure,
+      path: publicCookiePath(env),
+      maxAge: 0,
+    },
+  };
 }
 
 function cookieValue(header: string | undefined, name: string): string | null {

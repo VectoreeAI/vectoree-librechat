@@ -71,6 +71,10 @@ test('dev deploys after tests and main deploys after the backup', () => {
   assert.match(shared, /docker build -f Dockerfile/);
   assert.match(shared, /docker push "\$LIBRECHAT_IMAGE"/);
   assert.match(shared, /docker login "\$CI_REGISTRY"/);
+  assert.match(shared, /\.registry-pass/);
+  assert.match(shared, /--password-stdin < \.registry-pass/);
+  assert.equal(shared.includes("CI_REGISTRY_PASSWORD='"), false);
+  assert.match(shared, /rm -f ~\/\.ssh\/id_ed25519/);
   assert.ok(
     shared.indexOf('trap \'sudo docker logout "$CI_REGISTRY"') <
       shared.indexOf('sudo -E bash "$DEPLOY_PATH/deploy/deploy-remote.sh"'),

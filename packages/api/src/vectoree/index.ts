@@ -10,6 +10,7 @@ export {
   dropPreviewSession,
   installCloudPreviewEnv,
   PREVIEW_COOKIE,
+  PREVIEW_SWITCH_COOKIE,
   previewActive,
   publicCookiePath,
   redeemCloudPreview,

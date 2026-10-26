@@ -69,9 +69,13 @@ function sendError(res, error) {
 }
 
 function secureRequest(req) {
-  const forwarded = req.get('x-forwarded-proto');
-  const proto = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '';
-  return proto === 'https' || req.secure === true;
+  // Prefer Express trust-proxy (req.secure). Never trust a client-supplied
+  // X-Forwarded-Proto first hop. Force Secure when the configured public origin
+  // is https or when running in production.
+  if (req.secure === true) return true;
+  if (configuredPublicOrigin(process.env)) return true;
+  if (process.env.NODE_ENV === 'production') return true;
+  return false;
 }
 
 function rejectCloudLink(_req, res, next) {
@@ -98,9 +102,15 @@ function clearAuthCookies(res) {
 }
 
 function applyPreviewResult(res, result) {
+  // Clearing login cookies only when establishing/replacing the preview session.
   if (result.cookie) {
     clearAuthCookies(res);
     res.cookie(result.cookie.name, result.cookie.value, result.cookie.options);
+  }
+  if (Array.isArray(result.cookies)) {
+    for (const cookie of result.cookies) {
+      res.cookie(cookie.name, cookie.value, cookie.options);
+    }
   }
   return res.status(result.status).json(result.body);
 }
@@ -138,8 +148,10 @@ router.post('/preview/decline', middleware.requireSameOrigin, middleware.preview
     const result = declineCloudPreview(
       process.env,
       req.body && typeof req.body === 'object' ? req.body.switchToken : undefined,
+      req.headers.cookie,
+      secureRequest(req),
     );
-    return res.status(result.status).json(result.body);
+    return applyPreviewResult(res, result);
   } catch (error) {
     return sendError(res, error);
   }
