@@ -11,8 +11,10 @@
 #   生产：DEPLOY_HOST、DEPLOY_USER、DEPLOY_SSH_KEY、DEPLOY_PORT
 # 私钥变量是一行 base64（无空白）：base64 < ~/.ssh/你的私钥 | tr -d '\n'
 # DEV_DEPLOY_*、DEPLOY_*、REGISTRY_PULL_TOKEN、GITHUB_TOKEN 必须设成 Masked 和 Protected。
-# 可选：DEPLOY_HOST_KEY / DEV_DEPLOY_HOST_KEY 为 OpenSSH known_hosts 行（含主机指纹）。
-#   设置后 SSH 使用 StrictHostKeyChecking=yes；未设置时回退 accept-new（首次连接有 MITM 窗口）。
+# 主机指纹：DEPLOY_HOST_KEY / DEV_DEPLOY_HOST_KEY 为 OpenSSH known_hosts 行（含主机指纹）。
+#   生产部署必须配置 DEPLOY_HOST_KEY，SSH 走 StrictHostKeyChecking=yes，未配置时任务直接失败。
+#   测试环境允许不配 DEV_DEPLOY_HOST_KEY，回退 accept-new 并打印告警（首次连接有 MITM 窗口）。
+#   取值：ssh-keyscan -p <port> <host>（核对指纹后再粘贴），变量设为 Masked + Protected。
 # unit 会在合并请求里执行依赖的安装脚本。这些变量没标 Protected 时，未受保护的分支能读到密钥。
 # 部署目录默认 /opt/vectoree-librechat，可用 DEV_DEPLOY_PATH / DEPLOY_PATH 覆盖。
 #
@@ -138,6 +140,11 @@ unit:
         export DEPLOY_API_BASE_URL="${DEPLOY_API_BASE_URL:-https://vectoree.ai}"
       fi
       echo "deploy job=${CI_JOB_NAME:-} branch=${CI_COMMIT_BRANCH:-} host=${DEPLOY_HOST:-} path=${DEPLOY_PATH}"
+      # Production must verify the host key; only dev may fall back to accept-new.
+      if [[ "${CI_JOB_NAME:-}" != "deploy_development" && -z "${DEPLOY_HOST_KEY:-}" ]]; then
+        echo "ERROR: DEPLOY_HOST_KEY is required for production deploys (Masked+Protected known_hosts line)."
+        exit 1
+      fi
     - test -n "${DEPLOY_HOST:-}" || (echo "Set DEPLOY_HOST (dev 用 DEV_DEPLOY_HOST)" && exit 1)
     - test -n "${DEPLOY_USER:-}" || (echo "Set DEPLOY_USER (dev 用 DEV_DEPLOY_USER)" && exit 1)
     - test -n "${DEPLOY_SSH_KEY:-}" || (echo "Set DEPLOY_SSH_KEY (dev 用 DEV_DEPLOY_SSH_KEY)" && exit 1)
@@ -172,7 +179,7 @@ unit:
         chmod 600 ~/.ssh/known_hosts
         SSH_OPTS="$SSH_OPTS -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
       else
-        echo "WARNING: DEPLOY_HOST_KEY / DEV_DEPLOY_HOST_KEY unset; StrictHostKeyChecking=accept-new"
+        echo "WARNING: DEV_DEPLOY_HOST_KEY unset; dev deploy falls back to StrictHostKeyChecking=accept-new"
         SSH_OPTS="$SSH_OPTS -o StrictHostKeyChecking=accept-new"
       fi
       SSH="ssh $SSH_OPTS -i ~/.ssh/id_ed25519"
@@ -187,24 +194,21 @@ unit:
       $SCP deploy/env.example "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/deploy/env.example"
       $SCP librechat.example.yaml "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/librechat.example.yaml"
 
-      # Registry password via mode-600 file + docker login --password-stdin (not SSH argv/env).
-      PASS_FILE="$(mktemp)"
-      printf '%s' "$PULL_REGISTRY_PASSWORD" > "$PASS_FILE"
-      chmod 600 "$PASS_FILE"
-      $SCP "$PASS_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/.registry-pass"
-      rm -f "$PASS_FILE"
+      # Registry password travels on the encrypted stdin channel only: never on SSH
+      # argv, in a remote environment variable, or in a file on the deploy host.
+      set +o pipefail
+      printf '%s' "$PULL_REGISTRY_PASSWORD" | $SSH "${DEPLOY_USER}@${DEPLOY_HOST}" \
+        "sudo docker login '${CI_REGISTRY}' -u '${PULL_REGISTRY_USER}' --password-stdin"
+      set -o pipefail
 
       $SSH "${DEPLOY_USER}@${DEPLOY_HOST}" \
-        "DEPLOY_PATH='${DEPLOY_PATH}' LIBRECHAT_IMAGE='${LIBRECHAT_IMAGE}' CI_REGISTRY='${CI_REGISTRY}' CI_REGISTRY_USER='${PULL_REGISTRY_USER}' DEPLOY_API_BASE_URL='${DEPLOY_API_BASE_URL}' bash -s" <<'REMOTE'
+        "DEPLOY_PATH='${DEPLOY_PATH}' LIBRECHAT_IMAGE='${LIBRECHAT_IMAGE}' CI_REGISTRY='${CI_REGISTRY}' DEPLOY_API_BASE_URL='${DEPLOY_API_BASE_URL}' bash -s" <<'REMOTE'
       set -euo pipefail
       cd "$DEPLOY_PATH"
       chmod +x deploy/deploy-remote.sh
-      chmod 600 .registry-pass
-
-      echo "=== Login GitLab Container Registry ==="
-      sudo docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin < .registry-pass
-      rm -f .registry-pass
-      trap 'sudo docker logout "$CI_REGISTRY" >/dev/null 2>&1 || true' EXIT
+      # Every exit path logs out and drops a credential file left by an older deploy.
+      trap 'rm -f "$DEPLOY_PATH/.registry-pass"; sudo docker logout "$CI_REGISTRY" >/dev/null 2>&1 || true' EXIT
+      rm -f "$DEPLOY_PATH/.registry-pass"
 
       echo "=== Disk space ==="
       df -h

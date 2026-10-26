@@ -56,8 +56,6 @@ export type PreviewRedeemResult = {
     projectId?: string;
     projectName?: string;
     confirm?: boolean;
-    /** @deprecated Prefer HttpOnly ve_preview_switch cookie; kept only for older clients. */
-    switchToken?: string;
     message?: string;
     code?: 'preview_required';
   };
@@ -158,7 +156,9 @@ export async function redeemCloudPreview(input: {
   if (!upstream.ok) {
     return {
       status: 502,
-      body: { message: readErrorMessage(data, `Vectoree could not open the preview (${upstream.status})`) },
+      body: {
+        message: readErrorMessage(data, `Vectoree could not open the preview (${upstream.status})`),
+      },
     };
   }
 
@@ -184,7 +184,7 @@ export async function redeemCloudPreview(input: {
     previous.lastUsed = now;
     return { status: 200, body: { projectId, projectName } };
   }
-  if (previous && !previous.pending && now - previous.lastUsed <= IDLE_MS) {
+  if (previous && previousId && !previous.pending && now - previous.lastUsed <= IDLE_MS) {
     const id = randomBytes(32).toString('hex');
     previews.set(id, {
       apiUrl,
@@ -203,12 +203,15 @@ export async function redeemCloudPreview(input: {
   if (previousId && PREVIEW_ID.test(previousId)) previews.delete(previousId);
   const id = randomBytes(32).toString('hex');
   previews.set(id, { apiUrl, apiKey, projectId, lastUsed: now });
-  return { status: 200, body: { projectId, projectName }, cookie: previewCookie(input.env, input.secure, id) };
+  return {
+    status: 200,
+    body: { projectId, projectName },
+    cookie: previewCookie(input.env, input.secure, id),
+  };
 }
 
 export function confirmCloudPreview(input: {
   env: NodeJS.ProcessEnv;
-  switchToken?: unknown;
   cookieHeader?: string;
   secure: boolean;
   now?: () => number;
@@ -216,8 +219,10 @@ export function confirmCloudPreview(input: {
   if (readDeployMode(input.env) !== 'cloud') {
     return { status: 404, body: { message: 'Not available in local mode' } };
   }
-  const token = resolveSwitchToken(input.cookieHeader, input.switchToken);
-  const pending = takePending(token, input.now?.() ?? Date.now());
+  const pending = takePending(
+    cookieValue(input.cookieHeader, PREVIEW_SWITCH_COOKIE),
+    input.now?.() ?? Date.now(),
+  );
   if (!pending) return expiredPreview();
   const previousId = cookieValue(input.cookieHeader, PREVIEW_COOKIE);
   if (!previousId || previousId !== pending.stored.fromPreviewId) {
@@ -235,24 +240,22 @@ export function confirmCloudPreview(input: {
   };
 }
 
+/** Only the browser that opened the preview can drop its own pending switch. */
 export function declineCloudPreview(
   env: NodeJS.ProcessEnv,
-  switchToken: unknown,
   cookieHeader?: string,
   secure = false,
+  now = Date.now(),
 ): PreviewRedeemResult {
   if (readDeployMode(env) !== 'cloud') {
     return { status: 404, body: { message: 'Not available in local mode' } };
   }
-  const id = resolveSwitchToken(cookieHeader, switchToken);
-  const stored = PREVIEW_ID.test(id) ? previews.get(id) : undefined;
+  const pending = takePending(cookieValue(cookieHeader, PREVIEW_SWITCH_COOKIE), now);
   const previousId = cookieValue(cookieHeader, PREVIEW_COOKIE);
-  if (stored?.pending) {
-    if (stored.fromPreviewId && previousId && previousId !== stored.fromPreviewId) {
-      return expiredPreview();
-    }
-    previews.delete(id);
+  if (!pending || !previousId || previousId !== pending.stored.fromPreviewId) {
+    return expiredPreview();
   }
+  previews.delete(pending.id);
   return { status: 200, body: {}, cookies: [clearSwitchCookie(env, secure)] };
 }
 
@@ -331,8 +334,11 @@ function previewCookie(env: NodeJS.ProcessEnv, secure: boolean, id: string): Pre
   };
 }
 
-function takePending(switchToken: unknown, now: number): { stored: StoredPreview; id: string } | null {
-  const id = typeof switchToken === 'string' ? switchToken : '';
+function takePending(
+  switchCookieValue: string | null,
+  now: number,
+): { stored: StoredPreview; id: string } | null {
+  const id = switchCookieValue ?? '';
   if (!PREVIEW_ID.test(id)) return null;
   const stored = previews.get(id);
   if (!stored?.pending) return null;
@@ -356,17 +362,13 @@ function activeStored(cookieHeader: string | undefined, now = Date.now()): Store
   return stored;
 }
 
-function touchPreview(cookieHeader: string | undefined, now = Date.now()): PreviewCredentials | null {
+function touchPreview(
+  cookieHeader: string | undefined,
+  now = Date.now(),
+): PreviewCredentials | null {
   const stored = activeStored(cookieHeader, now);
   if (!stored) return null;
   return { apiUrl: stored.apiUrl, apiKey: stored.apiKey, projectId: stored.projectId };
-}
-
-
-function resolveSwitchToken(cookieHeader: string | undefined, switchToken: unknown): string {
-  const fromCookie = cookieValue(cookieHeader, PREVIEW_SWITCH_COOKIE);
-  if (fromCookie && PREVIEW_ID.test(fromCookie)) return fromCookie;
-  return typeof switchToken === 'string' ? switchToken : '';
 }
 
 function switchCookie(env: NodeJS.ProcessEnv, secure: boolean, id: string): PreviewCookie {

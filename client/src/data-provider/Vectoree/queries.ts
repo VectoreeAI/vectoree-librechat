@@ -40,7 +40,6 @@ export type PreviewRedeemBody = {
   projectId?: string;
   projectName?: string;
   confirm?: boolean;
-  switchToken?: string;
 };
 
 let redeemInflight: { ticket: string; promise: Promise<PreviewRedeemBody | null> } | null = null;
@@ -83,7 +82,6 @@ function readPreviewBody(data: unknown): PreviewRedeemBody {
     ...(typeof record.projectId === 'string' ? { projectId: record.projectId } : {}),
     ...(typeof record.projectName === 'string' ? { projectName: record.projectName } : {}),
     ...(record.confirm === true ? { confirm: true } : {}),
-    ...(typeof record.switchToken === 'string' ? { switchToken: record.switchToken } : {}),
   };
 }
 
@@ -134,12 +132,18 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 export async function fetchVectoreeLinkStatus(): Promise<VectoreeLinkStatus> {
-  const response = await fetch(vectoreeUrl('/api/vectoree/link-status'), { credentials: 'same-origin' });
+  const response = await fetch(vectoreeUrl('/api/vectoree/link-status'), {
+    credentials: 'same-origin',
+  });
   if (!response.ok) {
     throw new Error('Could not check Vectoree link status');
   }
   const data = await readJson(response);
-  if (!data || typeof data !== 'object' || typeof (data as { linked?: unknown }).linked !== 'boolean') {
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    typeof (data as { linked?: unknown }).linked !== 'boolean'
+  ) {
     throw new Error('Could not check Vectoree link status');
   }
   const record = data as {
@@ -151,9 +155,13 @@ export async function fetchVectoreeLinkStatus(): Promise<VectoreeLinkStatus> {
   };
   return {
     linked: record.linked,
-    ...(typeof record.projectName === 'string' && record.projectName ? { projectName: record.projectName } : {}),
+    ...(typeof record.projectName === 'string' && record.projectName
+      ? { projectName: record.projectName }
+      : {}),
     ...(typeof record.apiUrl === 'string' && record.apiUrl ? { apiUrl: record.apiUrl } : {}),
-    ...(record.deployMode === 'local' || record.deployMode === 'cloud' ? { deployMode: record.deployMode } : {}),
+    ...(record.deployMode === 'local' || record.deployMode === 'cloud'
+      ? { deployMode: record.deployMode }
+      : {}),
     ...(record.previewed === true ? { previewed: true } : { previewed: false }),
   };
 }
@@ -197,7 +205,8 @@ export async function startVectoreeLink(input: {
   const data = await readJson(response);
   const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   if (!response.ok) {
-    const message = typeof record.message === 'string' ? record.message : 'Could not start Vectoree login';
+    const message =
+      typeof record.message === 'string' ? record.message : 'Could not start Vectoree login';
     throw new Error(message);
   }
   return parseSnapshot(record);
@@ -212,7 +221,9 @@ export function useVectoreeLinkStatus(): QueryObserverResult<VectoreeLinkStatus>
   });
 }
 
-export function useVectoreeLinkPoll(enabled: boolean): QueryObserverResult<VectoreeConnectSnapshot> {
+export function useVectoreeLinkPoll(
+  enabled: boolean,
+): QueryObserverResult<VectoreeConnectSnapshot> {
   return useQuery(vectoreeLinkPollKey, fetchVectoreeLinkPoll, {
     enabled,
     retry: false,
@@ -294,7 +305,9 @@ export async function submitVectoreeAppAuth(input: {
   };
 }
 
-function readWalletBilling(record: Record<string, unknown>): { code: string; billingUrl: string } | undefined {
+function readWalletBilling(
+  record: Record<string, unknown>,
+): { code: string; billingUrl: string } | undefined {
   if (record.code !== 'BILLING_WALLET_NOT_ACTIVATED' || typeof record.billingUrl !== 'string') {
     return undefined;
   }

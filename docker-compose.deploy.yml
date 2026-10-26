@@ -52,8 +52,8 @@ services:
     image: mongo:8.0.20
     container_name: vectoree-librechat-mongodb
     restart: unless-stopped
-    env_file:
-      - .env
+    # No env_file here: Mongo needs only MONGO_INITDB_* below. Loading .env would
+    # put JWT_SECRET, CREDS_KEY/IV and the credentialed MONGO_URI into this container.
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-librechat}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD}

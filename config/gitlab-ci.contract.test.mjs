@@ -15,6 +15,19 @@ const job = (name, next) => {
   return ciText.slice(start, end);
 };
 
+const composeText = readFileSync(path.join(root, 'docker-compose.deploy.yml'), 'utf8');
+
+const service = (name, next) => {
+  const start = composeText.indexOf(`\n  ${name}:\n`);
+  assert.notEqual(start, -1, name);
+  const candidates = next
+    ? [`\n  ${next}:\n`, `\n${next}:\n`].map((needle) => composeText.indexOf(needle, start + 1))
+    : [];
+  const end = next ? Math.min(...candidates.filter((index) => index !== -1)) : composeText.length;
+  assert.notEqual(end, Number.POSITIVE_INFINITY, next);
+  return composeText.slice(start, end);
+};
+
 const pattern = ciText.match(/secret_pattern='([^']*)'/)?.[1];
 
 const matchesSecret = (text) => {
@@ -71,14 +84,28 @@ test('dev deploys after tests and main deploys after the backup', () => {
   assert.match(shared, /docker build -f Dockerfile/);
   assert.match(shared, /docker push "\$LIBRECHAT_IMAGE"/);
   assert.match(shared, /docker login "\$CI_REGISTRY"/);
-  assert.match(shared, /\.registry-pass/);
-  assert.match(shared, /--password-stdin < \.registry-pass/);
+  // The pull credential is piped over SSH stdin; it is never written to the deploy host.
+  assert.match(shared, /printf '%s' "\$PULL_REGISTRY_PASSWORD" \| \$SSH/);
+  assert.match(shared, /--password-stdin"/);
   assert.equal(shared.includes("CI_REGISTRY_PASSWORD='"), false);
+  assert.equal(shared.includes('scp "$PASS_FILE"'), false);
+  assert.match(shared, /rm -f "\$DEPLOY_PATH\/\.registry-pass"/);
   assert.match(shared, /rm -f ~\/\.ssh\/id_ed25519/);
   assert.ok(
     shared.indexOf('trap \'sudo docker logout "$CI_REGISTRY"') <
       shared.indexOf('sudo -E bash "$DEPLOY_PATH/deploy/deploy-remote.sh"'),
   );
+  // Production must pin the host key; dev may still fall back to accept-new.
+  assert.match(
+    shared,
+    /if \[\[ "\$\{CI_JOB_NAME:-\}" != "deploy_development" && -z "\$\{DEPLOY_HOST_KEY:-\}" \]\]; then/,
+  );
+  assert.ok(
+    shared.indexOf('DEPLOY_HOST_KEY is required for production deploys') <
+      shared.indexOf('SSH="ssh $SSH_OPTS'),
+  );
+  assert.match(shared, /StrictHostKeyChecking=yes/);
+  assert.match(shared, /DEV_DEPLOY_HOST_KEY unset; dev deploy falls back/);
   assert.match(dev, /extends: \.deploy/);
   assert.match(dev, /resource_group: librechat-development-deploy/);
   assert.match(dev, /\$CI_COMMIT_BRANCH == "dev"/);
@@ -86,6 +113,20 @@ test('dev deploys after tests and main deploys after the backup', () => {
   assert.match(prod, /resource_group: librechat-production-deploy/);
   assert.match(prod, /\$CI_COMMIT_BRANCH == "main"/);
   assert.match(prod, /needs:\n {4}- test\n {4}- unit\n {4}- backup_main/);
+});
+
+test('only the api container receives the deploy secret file', () => {
+  const api = service('api', 'mongodb');
+  const mongodb = service('mongodb', 'volumes');
+  assert.match(api, /env_file:\n {6}- \.env/);
+  assert.equal(/^\s+env_file:/m.test(mongodb), false);
+  assert.match(mongodb, /MONGO_INITDB_ROOT_USERNAME: \$\{MONGO_ROOT_USER:-librechat\}/);
+  assert.match(
+    mongodb,
+    /MONGO_INITDB_ROOT_PASSWORD: \$\{MONGO_ROOT_PASSWORD:\?set MONGO_ROOT_PASSWORD\}/,
+  );
+  assert.equal(/^\s+MONGO_URI:/m.test(mongodb), false);
+  assert.match(mongodb, /--authenticationDatabase admin/);
 });
 
 test('test job runs only the pipeline contract test', () => {

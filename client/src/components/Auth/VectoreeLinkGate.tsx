@@ -58,10 +58,14 @@ export default function VectoreeLinkGate() {
     setBusy(true);
     try {
       await declinePreviewSwitch();
+    } catch {
+      // The pending switch expired or the preview session is gone; the status query below decides where to go.
+    } finally {
+      // A failed decline still must not trap the visitor on the prompt.
       setSwitchAsk(null);
       setPendingTicket(false);
-    } finally {
       setBusy(false);
+      await queryClient.invalidateQueries(vectoreeLinkStatusKey);
     }
   }
 
@@ -82,17 +86,29 @@ export default function VectoreeLinkGate() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-surface-primary px-6">
         <div className="w-full max-w-md text-center">
-          <h1 className="text-xl text-text-primary">{localize('com_auth_vectoree_preview_switch')}</h1>
+          <h1 className="text-xl text-text-primary">
+            {localize('com_auth_vectoree_preview_switch')}
+          </h1>
           <p className="mt-3 text-sm text-text-secondary">
             {localize('com_auth_vectoree_preview_switch_note', {
               0: switchAsk.projectName,
             })}
           </p>
           <div className="mt-6 flex flex-col gap-3">
-            <Button type="button" variant="submit" disabled={busy} onClick={() => void switchProject()}>
+            <Button
+              type="button"
+              variant="submit"
+              disabled={busy}
+              onClick={() => void switchProject()}
+            >
               {localize('com_auth_vectoree_preview_switch_confirm')}
             </Button>
-            <Button type="button" variant="outline" disabled={busy} onClick={() => void stayOnCurrentProject()}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void stayOnCurrentProject()}
+            >
               {localize('com_auth_vectoree_preview_switch_stay')}
             </Button>
           </div>
